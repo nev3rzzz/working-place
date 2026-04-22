@@ -1,0 +1,17 @@
+{
+  "keys": [
+    {
+      "key": "USER1-TRIAL-123",
+      "hwid": "ВСТАВЬ_HWID_ИЗ_PRECHECK",
+      "userId": 123456789,
+      "username": "PlayerName",
+      "displayName": "DisplayName",
+      "discordUsername": "@discordname",
+      "profileUrl": "https://www.roblox.com/users/123456789/profile",
+      "tier": "basic",
+      "expiresAt": "2026-05-01T18:00:00Z",
+      "status": "active",
+      "note": "issued via precheck"
+    }
+  ]
+}
