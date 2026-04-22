@@ -1,6 +1,24 @@
 {
   "keys": [
     {
+      "key": "GOLDNOVE3-2MIN",
+      "hwid": "c48fa863-e275-11f0-a0d9-806e6f6e6963",
+      "userId": 3162632551,
+      "username": "GoldNove3",
+      "displayName": "Guestworker",
+      "discordUsername": "Tewequ",
+      "profileUrl": "https://www.roblox.com/users/3162632551/profile",
+      "tier": "basic",
+      "startsAt": "2026-04-22T21:17:00Z",
+      "expiresAt": "2026-04-22T21:19:00Z",
+      "status": "active",
+      "note": "2 minute scheduled access"
+    }
+  ]
+}
+{
+  "keys": [
+    {
       "key": "USER1-TRIAL-123",
       "hwid": "ВСТАВЬ_HWID_ИЗ_PRECHECK",
       "userId": 123456789,
