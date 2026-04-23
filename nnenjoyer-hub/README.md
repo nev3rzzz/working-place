@@ -11,6 +11,7 @@ github_repo_ready/
     precheck.lua
     games/
       README.md
+      ultra_power.lua
     templates/
       game_script_template.lua
   backend/
@@ -66,6 +67,6 @@ github_repo_ready/
 
 - `Ultra Power`
   PlaceId: `8146731988`
-  Currently handled locally inside `client/loader.lua`
+  Published as `client/games/ultra_power.lua`
 
-You can keep Ultra Power embedded, or later move it into `client/games/ultra_power.lua` and route it the same way as other games.
+The loader is now universal. It authenticates with the backend first, then routes by `PlaceId` to the correct game-specific file.
