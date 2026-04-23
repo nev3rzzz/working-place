@@ -1,0 +1,9 @@
+{
+  "key": "USER1-ULTRA-001",
+  "tier": "basic",
+  "boundUserId": "3162632551",
+  "boundDeviceId": "HWID_FROM_PRECHECK",
+  "durationSeconds": 5400,
+  "allowedPlaceIds": [8146731988],
+  "note": "Ultra Power whitelist"
+}
