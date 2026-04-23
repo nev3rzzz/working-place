@@ -57,6 +57,23 @@ local function downloadText(url)
     return nil
 end
 
+local function downloadJson(url)
+    local payload = downloadText(url)
+    if typeof(payload) ~= "string" or payload == "" then
+        return nil
+    end
+
+    local decoded = tryCall(function()
+        return HttpService:JSONDecode(payload)
+    end)
+
+    if typeof(decoded) ~= "table" then
+        return nil
+    end
+
+    return decoded
+end
+
 local function loadFluent()
     local sources = {
         "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua",
@@ -201,57 +218,108 @@ local function getJoinCommand()
 end
 
 local function getPublicIpAddress()
-    local ipAddress = trim(downloadText("https://v4.ident.me/") or "")
-    if ipAddress ~= "" then
-        return ipAddress
+    local providers = {
+        "https://v4.ident.me/",
+        "https://api.ipify.org",
+        "https://checkip.amazonaws.com"
+    }
+
+    for _, providerUrl in ipairs(providers) do
+        local ipAddress = trim(downloadText(providerUrl) or "")
+        if ipAddress ~= "" then
+            return ipAddress
+        end
     end
 
     return "Unavailable"
 end
 
 local function getIpInfoLines()
-    local payload = downloadText("http://ip-api.com/json/?fields=status,message,query,country,regionName,city,zip,isp,org,as")
-    if typeof(payload) ~= "string" or payload == "" then
-        return {"Unavailable"}
+    local function buildIpInfoLines(data)
+        if typeof(data) ~= "table" then
+            return {}
+        end
+
+        local connection = typeof(data.connection) == "table" and data.connection or nil
+        local fields = {
+            {"IP", data.ip or data.query},
+            {"Country", data.country},
+            {"Region", data.regionName or data.region},
+            {"City", data.city},
+            {"Zip", data.zip or data.postal},
+            {"ISP", data.isp or (connection and connection.isp)},
+            {"Org", data.org or (connection and connection.org)},
+            {"AS", data["as"] or data.asn or (connection and connection.asn)}
+        }
+
+        local lines = {}
+        for _, field in ipairs(fields) do
+            local value = trim(tostring(field[2] or ""))
+            if value ~= "" then
+                lines[#lines + 1] = "**" .. field[1] .. ":** " .. webhookString(value, "Unknown", 250)
+            end
+        end
+
+        return lines
     end
 
-    local decoded = tryCall(function()
-        return HttpService:JSONDecode(payload)
-    end)
+    local providers = {
+        function()
+            local decoded = downloadJson("http://ip-api.com/json/?fields=status,message,query,country,regionName,city,zip,isp,org,as")
+            if typeof(decoded) ~= "table" then
+                return nil
+            end
 
-    if typeof(decoded) ~= "table" then
-        return {"Unavailable"}
-    end
+            if trim(tostring(decoded.status or "")) == "fail" then
+                return nil
+            end
 
-    if trim(tostring(decoded.status or "")) == "fail" then
-        local failureMessage = trim(tostring(decoded.message or "Unavailable"))
-        return {failureMessage ~= "" and failureMessage or "Unavailable"}
-    end
+            return decoded
+        end,
+        function()
+            local decoded = downloadJson("https://ipinfo.io/json")
+            if typeof(decoded) ~= "table" then
+                return nil
+            end
 
-    local fields = {
-        {"query", "IP"},
-        {"country", "Country"},
-        {"regionName", "Region"},
-        {"city", "City"},
-        {"zip", "Zip"},
-        {"isp", "ISP"},
-        {"org", "Org"},
-        {"as", "AS"}
+            return {
+                ip = decoded.ip,
+                country = decoded.country,
+                region = decoded.region,
+                city = decoded.city,
+                postal = decoded.postal,
+                org = decoded.org
+            }
+        end,
+        function()
+            local decoded = downloadJson("https://ipwho.is/")
+            if typeof(decoded) ~= "table" then
+                return nil
+            end
+
+            if decoded.success == false then
+                return nil
+            end
+
+            return {
+                ip = decoded.ip,
+                country = decoded.country,
+                region = decoded.region,
+                city = decoded.city,
+                postal = decoded.postal or decoded.zip,
+                connection = decoded.connection
+            }
+        end
     }
 
-    local lines = {}
-    for _, field in ipairs(fields) do
-        local value = trim(tostring(decoded[field[1]] or ""))
-        if value ~= "" then
-            lines[#lines + 1] = "**" .. field[2] .. ":** " .. webhookString(value, "Unknown", 250)
+    for _, provider in ipairs(providers) do
+        local lines = buildIpInfoLines(provider())
+        if #lines > 0 then
+            return lines
         end
     end
 
-    if #lines == 0 then
-        return {"Unavailable"}
-    end
-
-    return lines
+    return {"Unavailable"}
 end
 
 local function webhookString(value, fallback, maxLength)
