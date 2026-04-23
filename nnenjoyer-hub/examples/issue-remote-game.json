@@ -1,0 +1,9 @@
+{
+  "key": "USER1-REMOTE-001",
+  "tier": "basic",
+  "boundUserId": "3162632551",
+  "boundDeviceId": "HWID_FROM_PRECHECK",
+  "durationSeconds": 5400,
+  "allowedPlaceIds": [1234567890],
+  "note": "Remote game whitelist"
+}
