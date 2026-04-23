@@ -4,6 +4,8 @@ return function(context)
     local Workspace = game:GetService("Workspace")
     local UserInputService = game:GetService("UserInputService")
     local GuiService = game:GetService("GuiService")
+    local TweenService = game:GetService("TweenService")
+    local CoreGui = game:GetService("CoreGui")
 
     local LocalPlayer = context.LocalPlayer or Players.LocalPlayer
     local authTier = tostring(context.Auth and context.Auth.tier or "basic")
@@ -32,7 +34,7 @@ return function(context)
         Size = UDim2.fromOffset(620, 540),
         Acrylic = false,
         Theme = "Dark",
-        MinimizeKey = Enum.KeyCode.RightAlt
+        MinimizeKey = Enum.KeyCode.Unknown
     })
 
     local tabs = {
@@ -119,6 +121,31 @@ return function(context)
     local cachedGuiInset = GuiService:GetGuiInset()
     local lastMouseTargetX = nil
     local lastMouseTargetY = nil
+    local equipFirstToolsBind = nil
+    local aimMouseToggleBind = nil
+    local minimizeGuiBind = {
+        kind = "KeyCode",
+        code = Enum.KeyCode.RightAlt.Name
+    }
+    local pendingBindAction = nil
+    local bindCaptureGui = nil
+    local bindCaptureFrame = nil
+    local bindCaptureLabel = nil
+    local equipBindParagraph = nil
+    local aimBindParagraph = nil
+    local minimizeBindParagraph = nil
+    local aimMouseToggleControl = nil
+    local trackedWindowGui = nil
+    local trackedWindowFrame = nil
+    local trackedWindowScale = nil
+    local trackedWindowVisible = true
+    local trackedWindowAnimating = false
+    local trackedWindowShownPosition = nil
+    local trackedWindowToggleOffset = UDim2.fromOffset(0, 18)
+    local smoothWindowConnection = nil
+    local smoothWindowInputConnection = nil
+    local smoothWindowInputEndConnection = nil
+    local customBindConnection = nil
 
     local function notify(title, content)
         Fluent:Notify({
@@ -126,6 +153,513 @@ return function(context)
             Content = content,
             Duration = 5
         })
+    end
+
+    local function getGuiParent()
+        local hui = nil
+
+        pcall(function()
+            if gethui then
+                hui = gethui()
+            end
+        end)
+
+        return hui or CoreGui
+    end
+
+    local function setParagraphContent(paragraph, title, content)
+        if not paragraph then
+            return
+        end
+
+        pcall(function()
+            if paragraph.SetTitle then
+                paragraph:SetTitle(title)
+            end
+        end)
+
+        pcall(function()
+            if paragraph.SetDesc then
+                paragraph:SetDesc(content)
+            elseif paragraph.SetContent then
+                paragraph:SetContent(content)
+            end
+        end)
+    end
+
+    local function bindToDisplayText(bind)
+        if not bind then
+            return "None"
+        end
+
+        return bind.code
+    end
+
+    local function createBindFromInput(input)
+        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+            return {
+                kind = "KeyCode",
+                code = input.KeyCode.Name
+            }
+        end
+
+        return nil
+    end
+
+    local function doesBindMatch(bind, input)
+        return bind ~= nil and bind.kind == "KeyCode" and input.UserInputType == Enum.UserInputType.Keyboard and
+            input.KeyCode.Name == bind.code
+    end
+
+    local function updateBindParagraphs()
+        setParagraphContent(equipBindParagraph, "Equip Bind", bindToDisplayText(equipFirstToolsBind))
+        setParagraphContent(aimBindParagraph, "Aim Bind", bindToDisplayText(aimMouseToggleBind))
+        setParagraphContent(minimizeBindParagraph, "Minimize Bind", bindToDisplayText(minimizeGuiBind))
+    end
+
+    local function getBindPopupPosition()
+        local camera = Workspace.CurrentCamera
+        local viewportSize = camera and camera.ViewportSize or Vector2.new(1280, 720)
+        local popupX = math.floor((viewportSize.X - 280) * 0.5)
+        local popupY = 84
+
+        if trackedWindowFrame and trackedWindowFrame.Parent then
+            popupX = math.clamp(
+                trackedWindowFrame.AbsolutePosition.X + trackedWindowFrame.AbsoluteSize.X - 300,
+                16,
+                math.max(16, viewportSize.X - 296)
+            )
+            popupY = math.clamp(
+                trackedWindowFrame.AbsolutePosition.Y + 78,
+                16,
+                math.max(16, viewportSize.Y - 126)
+            )
+        end
+
+        return UDim2.fromOffset(popupX, popupY)
+    end
+
+    local function destroyBindCapturePopup()
+        local currentGui = bindCaptureGui
+        local currentFrame = bindCaptureFrame
+
+        bindCaptureGui = nil
+        bindCaptureFrame = nil
+        bindCaptureLabel = nil
+
+        if currentFrame then
+            pcall(function()
+                TweenService:Create(currentFrame, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                    BackgroundTransparency = 1,
+                    Position = currentFrame.Position + UDim2.fromOffset(0, 8)
+                }):Play()
+            end)
+        end
+
+        if currentGui then
+            task.delay(0.16, function()
+                pcall(function()
+                    currentGui:Destroy()
+                end)
+            end)
+        end
+    end
+
+    local function showBindCapturePopup(displayName)
+        destroyBindCapturePopup()
+
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "NNEnjoyerBindCapture"
+        screenGui.ResetOnSpawn = false
+        screenGui.IgnoreGuiInset = true
+        screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        screenGui.Parent = getGuiParent()
+
+        local frame = Instance.new("Frame")
+        frame.AnchorPoint = Vector2.new(0, 0)
+        frame.Position = getBindPopupPosition() + UDim2.fromOffset(0, 10)
+        frame.Size = UDim2.fromOffset(280, 92)
+        frame.BackgroundColor3 = Color3.fromRGB(22, 25, 31)
+        frame.BackgroundTransparency = 1
+        frame.BorderSizePixel = 0
+        frame.Parent = screenGui
+
+        local frameCorner = Instance.new("UICorner")
+        frameCorner.CornerRadius = UDim.new(0, 12)
+        frameCorner.Parent = frame
+
+        local frameStroke = Instance.new("UIStroke")
+        frameStroke.Color = Color3.fromRGB(78, 120, 255)
+        frameStroke.Thickness = 1
+        frameStroke.Transparency = 0.2
+        frameStroke.Parent = frame
+
+        local titleLabel = Instance.new("TextLabel")
+        titleLabel.BackgroundTransparency = 1
+        titleLabel.Position = UDim2.fromOffset(14, 12)
+        titleLabel.Size = UDim2.new(1, -28, 0, 20)
+        titleLabel.Font = Enum.Font.GothamBold
+        titleLabel.Text = displayName
+        titleLabel.TextColor3 = Color3.fromRGB(242, 245, 255)
+        titleLabel.TextSize = 14
+        titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+        titleLabel.Parent = frame
+
+        local infoLabel = Instance.new("TextLabel")
+        infoLabel.BackgroundTransparency = 1
+        infoLabel.Position = UDim2.fromOffset(14, 38)
+        infoLabel.Size = UDim2.new(1, -28, 0, 40)
+        infoLabel.Font = Enum.Font.Gotham
+        infoLabel.Text = "Press a keyboard key now.\nBackspace clears bind, Esc cancels."
+        infoLabel.TextColor3 = Color3.fromRGB(176, 183, 198)
+        infoLabel.TextSize = 13
+        infoLabel.TextWrapped = true
+        infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+        infoLabel.TextYAlignment = Enum.TextYAlignment.Top
+        infoLabel.Parent = frame
+
+        bindCaptureGui = screenGui
+        bindCaptureFrame = frame
+        bindCaptureLabel = infoLabel
+
+        TweenService:Create(frame, TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+            BackgroundTransparency = 0,
+            Position = getBindPopupPosition()
+        }):Play()
+    end
+
+    local function assignBind(actionName, bind)
+        if actionName == "equip" then
+            equipFirstToolsBind = bind
+        elseif actionName == "aim" then
+            aimMouseToggleBind = bind
+        elseif actionName == "minimize" then
+            minimizeGuiBind = bind
+        end
+
+        updateBindParagraphs()
+    end
+
+    local function clearBind(actionName)
+        if actionName == "equip" then
+            equipFirstToolsBind = nil
+        elseif actionName == "aim" then
+            aimMouseToggleBind = nil
+        elseif actionName == "minimize" then
+            minimizeGuiBind = nil
+        end
+
+        updateBindParagraphs()
+    end
+
+    local function beginBindCapture(actionName, displayName)
+        pendingBindAction = actionName
+        showBindCapturePopup(displayName)
+    end
+
+    local function getGuiRoot()
+        return getGuiParent() or LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    end
+
+    local function findWindowTitleObject(root)
+        if not root then
+            return nil
+        end
+
+        for _, descendant in ipairs(root:GetDescendants()) do
+            if (descendant:IsA("TextLabel") or descendant:IsA("TextButton")) and descendant.Text == context.WindowTitle then
+                return descendant
+            end
+        end
+
+        return nil
+    end
+
+    local function findWindowFrameFromObject(guiObject)
+        local current = guiObject
+
+        while current and current.Parent do
+            if current:IsA("GuiObject") and current.AbsoluteSize.X >= 360 and current.AbsoluteSize.Y >= 240 then
+                return current
+            end
+
+            current = current.Parent
+        end
+
+        return nil
+    end
+
+    local function findWindowScreenGui(guiObject)
+        local current = guiObject
+
+        while current and current.Parent do
+            if current:IsA("ScreenGui") then
+                return current
+            end
+
+            current = current.Parent
+        end
+
+        return nil
+    end
+
+    local function findWindowDragHandle(windowFrame, titleObject)
+        local current = titleObject
+
+        while current and current ~= windowFrame do
+            if current:IsA("GuiObject") and current.AbsoluteSize.X >= math.floor(windowFrame.AbsoluteSize.X * 0.55) and
+                current.AbsoluteSize.Y <= 64 then
+                return current
+            end
+
+            current = current.Parent
+        end
+
+        if titleObject and titleObject.Parent and titleObject.Parent:IsA("GuiObject") then
+            return titleObject.Parent
+        end
+
+        return titleObject
+    end
+
+    local function lerpUDim2(fromValue, toValue, alpha)
+        return UDim2.new(
+            fromValue.X.Scale + ((toValue.X.Scale - fromValue.X.Scale) * alpha),
+            fromValue.X.Offset + ((toValue.X.Offset - fromValue.X.Offset) * alpha),
+            fromValue.Y.Scale + ((toValue.Y.Scale - fromValue.Y.Scale) * alpha),
+            fromValue.Y.Offset + ((toValue.Y.Offset - fromValue.Y.Offset) * alpha)
+        )
+    end
+
+    local function captureWindowReferences()
+        local root = getGuiRoot()
+        if not root then
+            return false
+        end
+
+        local titleObject = findWindowTitleObject(root)
+        if not titleObject then
+            return false
+        end
+
+        local windowFrame = findWindowFrameFromObject(titleObject)
+        if not windowFrame then
+            return false
+        end
+
+        local windowGui = findWindowScreenGui(windowFrame)
+        if not windowGui then
+            return false
+        end
+
+        local scale = windowFrame:FindFirstChild("NNEnjoyerSmoothScale")
+        if not scale then
+            scale = Instance.new("UIScale")
+            scale.Name = "NNEnjoyerSmoothScale"
+            scale.Parent = windowFrame
+        end
+
+        trackedWindowGui = windowGui
+        trackedWindowFrame = windowFrame
+        trackedWindowScale = scale
+        trackedWindowVisible = windowGui.Enabled ~= false
+        trackedWindowAnimating = false
+        trackedWindowShownPosition = windowFrame.Position
+
+        return true, titleObject, windowFrame
+    end
+
+    local function tweenWindowVisibility(show)
+        if not trackedWindowFrame or not trackedWindowScale or not trackedWindowGui then
+            return false
+        end
+
+        if trackedWindowShownPosition == nil then
+            trackedWindowShownPosition = trackedWindowFrame.Position
+        end
+
+        trackedWindowAnimating = true
+
+        if show then
+            trackedWindowGui.Enabled = true
+            trackedWindowFrame.Visible = true
+            trackedWindowVisible = true
+            trackedWindowScale.Scale = 0.96
+            trackedWindowFrame.Position = trackedWindowShownPosition + trackedWindowToggleOffset
+
+            local scaleTween = TweenService:Create(trackedWindowScale, TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Scale = 1
+            })
+
+            local positionTween = TweenService:Create(trackedWindowFrame, TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Position = trackedWindowShownPosition
+            })
+
+            local finished = false
+            positionTween.Completed:Connect(function()
+                finished = true
+                trackedWindowAnimating = false
+            end)
+
+            task.delay(0.35, function()
+                if not finished then
+                    trackedWindowAnimating = false
+                end
+            end)
+
+            scaleTween:Play()
+            positionTween:Play()
+            return true
+        end
+
+        trackedWindowShownPosition = trackedWindowFrame.Position
+
+        local scaleTween = TweenService:Create(trackedWindowScale, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
+            Scale = 0.96
+        })
+
+        local positionTween = TweenService:Create(trackedWindowFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
+            Position = trackedWindowShownPosition + trackedWindowToggleOffset
+        })
+
+        local finished = false
+        positionTween.Completed:Connect(function()
+            finished = true
+            trackedWindowVisible = false
+            trackedWindowGui.Enabled = false
+            trackedWindowFrame.Visible = true
+            trackedWindowFrame.Position = trackedWindowShownPosition
+            trackedWindowScale.Scale = 1
+            trackedWindowAnimating = false
+        end)
+
+        task.delay(0.3, function()
+            if not finished then
+                trackedWindowVisible = false
+                trackedWindowGui.Enabled = false
+                trackedWindowFrame.Visible = true
+                trackedWindowFrame.Position = trackedWindowShownPosition
+                trackedWindowScale.Scale = 1
+                trackedWindowAnimating = false
+            end
+        end)
+
+        scaleTween:Play()
+        positionTween:Play()
+        return true
+    end
+
+    local function toggleWindowVisibility()
+        if not trackedWindowFrame or not trackedWindowGui or not trackedWindowFrame.Parent or not trackedWindowGui.Parent then
+            local foundWindow = captureWindowReferences()
+            if not foundWindow then
+                return false
+            end
+        end
+
+        if trackedWindowAnimating then
+            return false
+        end
+
+        local shouldShow = trackedWindowGui.Enabled == false
+        trackedWindowVisible = trackedWindowGui.Enabled ~= false
+        return tweenWindowVisibility(shouldShow)
+    end
+
+    local function setupSmoothWindow()
+        task.spawn(function()
+            local titleObject = nil
+
+            for _ = 1, 40 do
+                titleObject = findWindowTitleObject(getGuiRoot())
+                if titleObject then
+                    break
+                end
+
+                task.wait(0.1)
+            end
+
+            if not titleObject then
+                return
+            end
+
+            local foundWindow, _, windowFrame = captureWindowReferences()
+            if not foundWindow or not windowFrame then
+                return
+            end
+
+            local dragHandle = findWindowDragHandle(windowFrame, titleObject) or windowFrame
+            tweenWindowVisibility(true)
+
+            if smoothWindowConnection then
+                smoothWindowConnection:Disconnect()
+                smoothWindowConnection = nil
+            end
+
+            if smoothWindowInputConnection then
+                smoothWindowInputConnection:Disconnect()
+                smoothWindowInputConnection = nil
+            end
+
+            if smoothWindowInputEndConnection then
+                smoothWindowInputEndConnection:Disconnect()
+                smoothWindowInputEndConnection = nil
+            end
+
+            local dragging = false
+            local activeDragInput = nil
+            local dragStartInputPosition = nil
+            local dragStartWindowPosition = nil
+            local targetWindowPosition = windowFrame.Position
+
+            smoothWindowConnection = RunService.RenderStepped:Connect(function()
+                if dragging then
+                    windowFrame.Position = lerpUDim2(windowFrame.Position, targetWindowPosition, 0.28)
+                    trackedWindowShownPosition = windowFrame.Position
+                end
+            end)
+
+            dragHandle.InputBegan:Connect(function(input)
+                if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+                    return
+                end
+
+                local relativeY = input.Position.Y - windowFrame.AbsolutePosition.Y
+                if relativeY > 48 then
+                    return
+                end
+
+                dragging = true
+                activeDragInput = input
+                dragStartInputPosition = input.Position
+                dragStartWindowPosition = windowFrame.Position
+                targetWindowPosition = windowFrame.Position
+            end)
+
+            smoothWindowInputConnection = UserInputService.InputChanged:Connect(function(input)
+                if not dragging or input ~= activeDragInput or not dragStartInputPosition or not dragStartWindowPosition then
+                    return
+                end
+
+                local delta = input.Position - dragStartInputPosition
+                targetWindowPosition = UDim2.new(
+                    dragStartWindowPosition.X.Scale,
+                    dragStartWindowPosition.X.Offset + delta.X,
+                    dragStartWindowPosition.Y.Scale,
+                    dragStartWindowPosition.Y.Offset + delta.Y
+                )
+            end)
+
+            smoothWindowInputEndConnection = UserInputService.InputEnded:Connect(function(input)
+                if input == activeDragInput then
+                    dragging = false
+                    activeDragInput = nil
+                    dragStartInputPosition = nil
+                    dragStartWindowPosition = nil
+                    trackedWindowShownPosition = windowFrame.Position
+                end
+            end)
+        end)
     end
 
     local function refreshCharacterCache(character)
@@ -1022,6 +1556,11 @@ return function(context)
         if not camera then
             notify("Targeting", "CurrentCamera was not found.")
             aimMouseAtTargetEnabled = false
+            if aimMouseToggleControl and aimMouseToggleControl.SetValue then
+                pcall(function()
+                    aimMouseToggleControl:SetValue(false)
+                end)
+            end
             return
         end
 
@@ -1037,7 +1576,13 @@ return function(context)
             if not targetPlayer then
                 if aimMouseAtTargetEnabled then
                     notify("Targeting", "Target left the game. Auto aim disabled.")
-                    setAimMouseAtTargetEnabled(false)
+                    if aimMouseToggleControl and aimMouseToggleControl.SetValue then
+                        pcall(function()
+                            aimMouseToggleControl:SetValue(false)
+                        end)
+                    else
+                        setAimMouseAtTargetEnabled(false)
+                    end
                 end
                 return
             end
@@ -1182,6 +1727,19 @@ return function(context)
         end
     })
 
+    equipBindParagraph = tabs.Main:AddParagraph({
+        Title = "Equip Bind",
+        Content = "None"
+    })
+
+    tabs.Main:AddButton({
+        Title = "Set Equip Bind",
+        Description = "Open a small popup to set the Equip First Tools bind",
+        Callback = function()
+            beginBindCapture("equip", "Set Equip First Tools Bind")
+        end
+    })
+
     tabs.Main:AddButton({
         Title = "Use All Equipped Tools",
         Description = "Activate every currently equipped tool once",
@@ -1253,12 +1811,27 @@ return function(context)
         targetCameraDistance = value
     end)
 
-    tabs.Targeting:AddToggle("UltraPowerAimCursorFollowToggle", {
+    aimMouseToggleControl = tabs.Targeting:AddToggle("UltraPowerAimCursorFollowToggle", {
         Title = "Aim Cursor + Follow Camera",
         Default = false
-    }):OnChanged(function(value)
+    })
+
+    aimMouseToggleControl:OnChanged(function(value)
         setAimMouseAtTargetEnabled(value)
     end)
+
+    aimBindParagraph = tabs.Targeting:AddParagraph({
+        Title = "Aim Bind",
+        Content = "None"
+    })
+
+    tabs.Targeting:AddButton({
+        Title = "Set Aim Bind",
+        Description = "Open a small popup to set the targeting bind",
+        Callback = function()
+            beginBindCapture("aim", "Set Aim Cursor + Follow Camera Bind")
+        end
+    })
 
     tabs.Tycoon:AddParagraph({
         Title = "Tycoon Automation",
@@ -1281,7 +1854,7 @@ return function(context)
         setAutoCollectCashEnabled(value)
     end)
 
-    tabs.Settings:AddSlider("UltraPowerAutoCollectCashDelaySlider", {
+    tabs.Tycoon:AddSlider("UltraPowerAutoCollectCashDelaySlider", {
         Title = "Auto Collect Delay",
         Default = autoCollectCashDelay,
         Min = 0.05,
@@ -1290,6 +1863,19 @@ return function(context)
     }):OnChanged(function(value)
         autoCollectCashDelay = value
     end)
+
+    minimizeBindParagraph = tabs.Settings:AddParagraph({
+        Title = "Minimize Bind",
+        Content = "RightAlt"
+    })
+
+    tabs.Settings:AddButton({
+        Title = "Set Minimize Bind",
+        Description = "Open a small popup to set the minimize toggle bind",
+        Callback = function()
+            beginBindCapture("minimize", "Set Minimize GUI Bind")
+        end
+    })
 
     tabs.Settings:AddParagraph({
         Title = "Notes",
@@ -1308,13 +1894,82 @@ return function(context)
             resetAimCursorCache()
             if aimMouseAtTargetEnabled then
                 notify("Targeting", player.Name .. " left the game. Auto aim disabled.")
-                setAimMouseAtTargetEnabled(false)
+                if aimMouseToggleControl and aimMouseToggleControl.SetValue then
+                    pcall(function()
+                        aimMouseToggleControl:SetValue(false)
+                    end)
+                else
+                    setAimMouseAtTargetEnabled(false)
+                end
             end
         end
 
         task.defer(refreshTargetPlayerDropdown)
     end)
 
+    updateBindParagraphs()
     window:SelectTab(1)
+    setupSmoothWindow()
+
+    customBindConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if pendingBindAction then
+            if input.UserInputType ~= Enum.UserInputType.Keyboard then
+                return
+            end
+
+            if input.KeyCode == Enum.KeyCode.Escape then
+                pendingBindAction = nil
+                destroyBindCapturePopup()
+                notify("Bind Capture", "Cancelled.")
+                return
+            end
+
+            if input.KeyCode == Enum.KeyCode.Backspace or input.KeyCode == Enum.KeyCode.Delete then
+                clearBind(pendingBindAction)
+                pendingBindAction = nil
+                destroyBindCapturePopup()
+                notify("Bind Capture", "Bind cleared.")
+                return
+            end
+
+            local bind = createBindFromInput(input)
+            if not bind then
+                return
+            end
+
+            local actionName = pendingBindAction
+            pendingBindAction = nil
+            assignBind(actionName, bind)
+            destroyBindCapturePopup()
+            notify("Bind Capture", "Bound to " .. bind.code)
+            return
+        end
+
+        if gameProcessed then
+            return
+        end
+
+        if doesBindMatch(minimizeGuiBind, input) then
+            toggleWindowVisibility()
+            return
+        end
+
+        if doesBindMatch(equipFirstToolsBind, input) then
+            task.spawn(equipConfiguredTools)
+            return
+        end
+
+        if doesBindMatch(aimMouseToggleBind, input) then
+            local nextValue = not aimMouseAtTargetEnabled
+            if aimMouseToggleControl and aimMouseToggleControl.SetValue then
+                pcall(function()
+                    aimMouseToggleControl:SetValue(nextValue)
+                end)
+            else
+                setAimMouseAtTargetEnabled(nextValue)
+            end
+        end
+    end)
+
     notify("Ultra Power", "Authorized as " .. authTier .. ".")
 end
