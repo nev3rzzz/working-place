@@ -9,13 +9,23 @@ return function(context)
     end
 
     replaceExact(
+        "    local GuiService = game:GetService(\"GuiService\")\n    local TweenService = game:GetService(\"TweenService\")\n    local CoreGui = game:GetService(\"CoreGui\")\n",
+        "    local GuiService = game:GetService(\"GuiService\")\n    local TweenService = game:GetService(\"TweenService\")\n    local ContextActionService = game:GetService(\"ContextActionService\")\n    local CoreGui = game:GetService(\"CoreGui\")\n"
+    )
+
+    replaceExact(
         "        Theme = \"Dark\",\n        MinimizeKey = Enum.KeyCode.Unknown\n",
         "        Theme = \"Dark\"\n"
     )
 
     replaceExact(
         "    local CENTER_MASS_AIM_MODE = \"UpperTorso/Torso\"\n",
-        "    local CENTER_MASS_AIM_MODE = \"UpperTorso/Torso\"\n    local BIND_POPUP_WIDTH = 320\n    local BIND_POPUP_HEIGHT = 118\n"
+        "    local CENTER_MASS_AIM_MODE = \"UpperTorso/Torso\"\n    local BIND_POPUP_WIDTH = 320\n    local BIND_POPUP_HEIGHT = 118\n    local MINIMIZE_ACTION_NAME = \"NNEnjoyerToggleWindow\"\n"
+    )
+
+    replaceExact(
+        "    local smoothWindowConnection = nil\n    local smoothWindowInputConnection = nil\n    local smoothWindowInputEndConnection = nil\n    local customBindConnection = nil\n",
+        "    local smoothWindowConnection = nil\n    local smoothWindowInputConnection = nil\n    local smoothWindowInputEndConnection = nil\n    local customBindConnection = nil\n    local refreshMinimizeBindAction = nil\n"
     )
 
     replaceExact(
@@ -29,8 +39,28 @@ return function(context)
     )
 
     replaceExact(
-        "        if gameProcessed then\n            return\n        end\n\n        if doesBindMatch(minimizeGuiBind, input) then\n            toggleWindowVisibility()\n            return\n        end",
-        "        if doesBindMatch(minimizeGuiBind, input) then\n            toggleWindowVisibility()\n            return\n        end\n\n        if gameProcessed then\n            return\n        end"
+        "    local function assignBind(actionName, bind)\n        if actionName == \"equip\" then\n            equipFirstToolsBind = bind\n        elseif actionName == \"aim\" then\n            aimMouseToggleBind = bind\n        elseif actionName == \"minimize\" then\n            minimizeGuiBind = bind\n        end\n\n        updateBindParagraphs()\n    end",
+        "    local function assignBind(actionName, bind)\n        if actionName == \"equip\" then\n            equipFirstToolsBind = bind\n        elseif actionName == \"aim\" then\n            aimMouseToggleBind = bind\n        elseif actionName == \"minimize\" then\n            minimizeGuiBind = bind\n            if refreshMinimizeBindAction then\n                refreshMinimizeBindAction()\n            end\n        end\n\n        updateBindParagraphs()\n    end"
+    )
+
+    replaceExact(
+        "    local function clearBind(actionName)\n        if actionName == \"equip\" then\n            equipFirstToolsBind = nil\n        elseif actionName == \"aim\" then\n            aimMouseToggleBind = nil\n        elseif actionName == \"minimize\" then\n            minimizeGuiBind = nil\n        end\n\n        updateBindParagraphs()\n    end",
+        "    local function clearBind(actionName)\n        if actionName == \"equip\" then\n            equipFirstToolsBind = nil\n        elseif actionName == \"aim\" then\n            aimMouseToggleBind = nil\n        elseif actionName == \"minimize\" then\n            minimizeGuiBind = nil\n            if refreshMinimizeBindAction then\n                refreshMinimizeBindAction()\n            end\n        end\n\n        updateBindParagraphs()\n    end"
+    )
+
+    replaceExact(
+        "    local function toggleWindowVisibility()\n        if not trackedWindowFrame or not trackedWindowGui or not trackedWindowFrame.Parent or not trackedWindowGui.Parent then\n            local foundWindow = captureWindowReferences()\n            if not foundWindow then\n                return false\n            end\n        end\n\n        if trackedWindowAnimating then\n            return false\n        end\n\n        local shouldShow = trackedWindowGui.Enabled == false\n        trackedWindowVisible = trackedWindowGui.Enabled ~= false\n        return tweenWindowVisibility(shouldShow)\n    end",
+        "    local function toggleWindowVisibility()\n        if not trackedWindowFrame or not trackedWindowGui or not trackedWindowFrame.Parent or not trackedWindowGui.Parent then\n            local foundWindow = captureWindowReferences()\n            if not foundWindow then\n                return false\n            end\n        end\n\n        if trackedWindowAnimating then\n            return false\n        end\n\n        local shouldShow = trackedWindowGui.Enabled == false\n        trackedWindowVisible = trackedWindowGui.Enabled ~= false\n        return tweenWindowVisibility(shouldShow)\n    end\n\n    refreshMinimizeBindAction = function()\n        pcall(function()\n            ContextActionService:UnbindAction(MINIMIZE_ACTION_NAME)\n        end)\n\n        if not minimizeGuiBind or minimizeGuiBind.kind ~= \"KeyCode\" then\n            return\n        end\n\n        local keyCode = Enum.KeyCode[minimizeGuiBind.code]\n        if not keyCode then\n            return\n        end\n\n        pcall(function()\n            ContextActionService:BindActionAtPriority(\n                MINIMIZE_ACTION_NAME,\n                function(_, inputState)\n                    if inputState == Enum.UserInputState.Begin then\n                        toggleWindowVisibility()\n                    end\n\n                    return Enum.ContextActionResult.Sink\n                end,\n                false,\n                Enum.ContextActionPriority.High.Value,\n                keyCode\n            )\n        end)\n    end"
+    )
+
+    replaceExact(
+        "    updateBindParagraphs()\n    window:SelectTab(1)\n    setupSmoothWindow()\n\n    customBindConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)",
+        "    updateBindParagraphs()\n    window:SelectTab(1)\n    setupSmoothWindow()\n    if refreshMinimizeBindAction then\n        refreshMinimizeBindAction()\n    end\n\n    customBindConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)"
+    )
+
+    replaceExact(
+        "        if gameProcessed then\n            return\n        end\n\n        if doesBindMatch(minimizeGuiBind, input) then\n            toggleWindowVisibility()\n            return\n        end\n\n        if doesBindMatch(equipFirstToolsBind, input) then",
+        "        if gameProcessed then\n            return\n        end\n\n        if doesBindMatch(equipFirstToolsBind, input) then"
     )
 
     local chunk = assert(loadstring(source, "@ultra_power_hotfix"))
