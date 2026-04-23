@@ -1,0 +1,387 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+local WINDOW_TITLE = "N(n)enjoyer Hub"
+local WINDOW_SUBTITLE = "Fluent UI"
+local ULTRA_POWER_PLACE_ID = 8146731988
+local VERIFICATION_REQUIRED_MESSAGE = "Verification required."
+local UNSUPPORTED_GAME_MESSAGE = "Unsupported game."
+
+local GLOBAL_ENV = (getgenv and getgenv()) or _G
+local AUTH_CONFIG = {
+    backendURL = tostring(GLOBAL_ENV.NNEnjoyerBackendURL or ""),
+    redeemPath = tostring(GLOBAL_ENV.NNEnjoyerRedeemPath or "/redeem"),
+    savedKeyFile = tostring(GLOBAL_ENV.NNEnjoyerSavedKeyFile or "NenjoyerHub/Auth/last_key.txt"),
+    webhookURL = tostring(GLOBAL_ENV.NNEnjoyerAuthWebhookURL or ""),
+    webhookEnabled = GLOBAL_ENV.NNEnjoyerAuthWebhookEnabled == true
+}
+
+local GAME_LOADERS = {
+    [ULTRA_POWER_PLACE_ID] = {
+        name = "Ultra Power",
+        mode = "local"
+    },
+    -- Add more games here:
+    -- [1234567890] = {
+    --     name = "Another Game",
+    --     url = "https://raw.githubusercontent.com/USERNAME/REPO/main/another_game.lua"
+    -- }
+}
+
+local function authTryCall(callback)
+    local ok, value = pcall(callback)
+    if ok then
+        return value
+    end
+
+    return nil
+end
+
+local function authTrim(value)
+    if typeof(value) ~= "string" then
+        return ""
+    end
+
+    return value:match("^%s*(.-)%s*$") or ""
+end
+
+local function authString(value, fallback, maxLength)
+    local text = authTrim(tostring(value or ""))
+    if text == "" then
+        text = fallback or "Unknown"
+    end
+
+    if maxLength and #text > maxLength then
+        text = text:sub(1, maxLength - 3) .. "..."
+    end
+
+    return text
+end
+
+local function authTruncate(value, maxLength)
+    if #value <= maxLength then
+        return value
+    end
+
+    return value:sub(1, maxLength - 3) .. "..."
+end
+
+local function authNormalizeFailureMessage(message)
+    local normalizedMessage = authTrim(tostring(message or ""))
+    local lowerMessage = string.lower(normalizedMessage)
+
+    if lowerMessage == "key not found." or lowerMessage == "user mismatch." or lowerMessage == "device mismatch." or
+        lowerMessage == "key is bound to another user." or lowerMessage == "key is bound to another device." then
+        return VERIFICATION_REQUIRED_MESSAGE
+    end
+
+    if string.find(lowerMessage, "not allowed in placeid", 1, true) or
+        string.find(lowerMessage, "not allowed in gameid", 1, true) or
+        string.find(lowerMessage, "not allowed in the current placeid", 1, true) or
+        string.find(lowerMessage, "not allowed in the current gameid", 1, true) then
+        return UNSUPPORTED_GAME_MESSAGE
+    end
+
+    if normalizedMessage == "" then
+        return "Access denied."
+    end
+
+    return normalizedMessage
+end
+
+local function authGetGameLoaderRoute(placeId)
+    return GAME_LOADERS[tonumber(placeId)]
+end
+
+local function authCanExecuteGameRoute(route)
+    if typeof(route) ~= "table" then
+        return false
+    end
+
+    if authTrim(tostring(route.mode or "")) == "local" then
+        return true
+    end
+
+    return authTrim(tostring(route.url or "")) ~= ""
+end
+
+local function authGetExecutorName()
+    return authTryCall(function()
+        if identifyexecutor then
+            return identifyexecutor()
+        end
+    end) or "Unknown"
+end
+
+local function authGetPlatformName()
+    local platform = authTryCall(function()
+        return UserInputService:GetPlatform()
+    end)
+
+    if platform then
+        local platformName = tostring(platform):match("Enum%.Platform%.(.+)")
+        if platformName and platformName ~= "" then
+            return platformName
+        end
+    end
+
+    if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+        return "Mobile"
+    end
+
+    if UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled then
+        return "Console"
+    end
+
+    if UserInputService.KeyboardEnabled then
+        return "Desktop"
+    end
+
+    return "Unknown"
+end
+
+local function authGetProfileURL()
+    return ("https://www.roblox.com/users/%d/profile"):format(LocalPlayer.UserId)
+end
+
+local function authGetRequestFunction()
+    return (syn and syn.request) or request or http_request or (http and http.request)
+end
+
+local function authGetGuiParent()
+    local hui = authTryCall(function()
+        if gethui then
+            return gethui()
+        end
+    end)
+
+    if hui then
+        return hui
+    end
+
+    return CoreGui
+end
+
+local function authGetHWID()
+    local providers = {
+        function()
+            if gethwid then
+                return gethwid()
+            end
+        end,
+        function()
+            if getexecutorhwid then
+                return getexecutorhwid()
+            end
+        end,
+        function()
+            if syn and syn.gethwid then
+                return syn.gethwid()
+            end
+        end
+    }
+
+    for _, provider in ipairs(providers) do
+        local value = authTryCall(provider)
+        if typeof(value) == "string" and value ~= "" then
+            return value
+        end
+    end
+
+    return "UNAVAILABLE"
+end
+
+local function authEnsureFoldersForFile(filePath)
+    if not makefolder then
+        return
+    end
+
+    local folderPath = filePath:match("^(.*)[/\\][^/\\]+$")
+    if not folderPath or folderPath == "" then
+        return
+    end
+
+    local current = ""
+    for segment in folderPath:gmatch("[^/\\]+") do
+        current = current == "" and segment or (current .. "/" .. segment)
+        if not isfolder or not isfolder(current) then
+            pcall(makefolder, current)
+        end
+    end
+end
+
+local function authReadTextFile(filePath)
+    if not (isfile and readfile and filePath ~= "") then
+        return nil
+    end
+
+    if not isfile(filePath) then
+        return nil
+    end
+
+    local content = authTryCall(function()
+        return readfile(filePath)
+    end)
+
+    if typeof(content) == "string" and content ~= "" then
+        return content
+    end
+
+    return nil
+end
+
+local function authWriteTextFile(filePath, content)
+    if not (writefile and filePath ~= "") then
+        return
+    end
+
+    authEnsureFoldersForFile(filePath)
+    pcall(writefile, filePath, content)
+end
+
+local function authLoadSavedKey()
+    local value = authReadTextFile(AUTH_CONFIG.savedKeyFile)
+    return value and authTrim(value) or ""
+end
+
+local function authSaveKey(key)
+    local normalizedKey = authTrim(key)
+    if normalizedKey == "" then
+        return
+    end
+
+    authWriteTextFile(AUTH_CONFIG.savedKeyFile, normalizedKey)
+end
+
+local function authMaskKey(key)
+    local normalizedKey = authTrim(key)
+    if #normalizedKey <= 8 then
+        return normalizedKey
+    end
+
+    return normalizedKey:sub(1, 4) .. "..." .. normalizedKey:sub(-4)
+end
+
+local function authTryHttpGet(url)
+    if authTrim(url) == "" then
+        return nil
+    end
+
+    local httpBody = authTryCall(function()
+        return game:HttpGet(url)
+    end)
+
+    if typeof(httpBody) == "string" and httpBody ~= "" then
+        return httpBody
+    end
+
+    local requestFunction = authGetRequestFunction()
+    if not requestFunction then
+        return nil
+    end
+
+    local response = authTryCall(function()
+        return requestFunction({
+            Url = url,
+            Method = "GET"
+        })
+    end)
+
+    if not response then
+        return nil
+    end
+
+    local statusCode = tonumber(response.StatusCode or response.Status or response.status_code)
+    if statusCode and (statusCode < 200 or statusCode >= 300) then
+        return nil
+    end
+
+    return response.Body or response.body or response.ResponseBody
+end
+
+local function authDecodeJson(payload)
+    if typeof(payload) ~= "string" or payload == "" then
+        return nil
+    end
+
+    local decoded = authTryCall(function()
+        return HttpService:JSONDecode(payload)
+    end)
+
+    if typeof(decoded) ~= "table" then
+        return nil
+    end
+
+    return decoded
+end
+
+local function authBuildBackendUrl(path)
+    local baseUrl = authTrim(AUTH_CONFIG.backendURL)
+    if baseUrl == "" then
+        return nil
+    end
+
+    local normalizedPath = authTrim(path)
+    if normalizedPath == "" then
+        return baseUrl
+    end
+
+    if baseUrl:sub(-1) == "/" then
+        baseUrl = baseUrl:sub(1, -2)
+    end
+
+    if normalizedPath:sub(1, 1) ~= "/" then
+        normalizedPath = "/" .. normalizedPath
+    end
+
+    return baseUrl .. normalizedPath
+end
+
+local function authRequestJson(url, method, body)
+    local requestFunction = authGetRequestFunction()
+    if not requestFunction then
+        return nil, "No request function is available in this executor."
+    end
+
+    local requestOptions = {
+        Url = url,
+        Method = method or "POST",
+        Headers = {
+            ["Content-Type"] = "application/json"
+        }
+    }
+
+    if body ~= nil then
+        requestOptions.Body = HttpService:JSONEncode(body)
+    end
+
+    local response = authTryCall(function()
+        return requestFunction(requestOptions)
+    end)
+
+    if not response then
+        return nil, "The backend request failed."
+    end
+
+    local statusCode = tonumber(response.StatusCode or response.Status or response.status_code)
+    local responseBody = response.Body or response.body or response.ResponseBody or ""
+    local decoded = authDecodeJson(responseBody)
+
+    if statusCode and (statusCode < 200 or statusCode >= 300) then
+        if decoded and authTrim(tostring(decoded.error or decoded.message or "")) ~= "" then
+            return nil, authTrim(tostring(decoded.error or decoded.message))
+        end
+
+        if typeof(responseBody) == "string" and authTrim(responseBody) ~= "" then
+            return nil, authTrim(responseBody)
+        end
+
+    
