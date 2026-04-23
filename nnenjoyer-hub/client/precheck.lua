@@ -1,5 +1,7 @@
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local LocalizationService = game:GetService("LocalizationService")
+local MarketplaceService = game:GetService("MarketplaceService")
 local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
@@ -170,6 +172,34 @@ local function getProfileURL()
     return ("https://www.roblox.com/users/%d/profile"):format(LocalPlayer.UserId)
 end
 
+local function getMembershipTypeName()
+    local membershipText = tostring(LocalPlayer.MembershipType or Enum.MembershipType.None)
+    local membershipName = membershipText:match("Enum%.MembershipType%.(.+)")
+    return membershipName or membershipText
+end
+
+local function getLocaleName()
+    return trim(tryCall(function()
+        return LocalizationService.RobloxLocaleId
+    end) or "") ~= "" and tostring(LocalizationService.RobloxLocaleId) or "Unknown"
+end
+
+local function getGameName()
+    local productInfo = tryCall(function()
+        return MarketplaceService:GetProductInfo(game.PlaceId)
+    end)
+
+    if typeof(productInfo) == "table" and trim(tostring(productInfo.Name or "")) ~= "" then
+        return tostring(productInfo.Name)
+    end
+
+    return "Unknown"
+end
+
+local function getJoinCommand()
+    return ("Roblox.GameLauncher.joinGameInstance(%d, %q)"):format(game.PlaceId, game.JobId)
+end
+
 local function webhookString(value, fallback, maxLength)
     local text = trim(tostring(value or ""))
     if text == "" then
@@ -243,7 +273,7 @@ local function promptDiscordUsername()
 
     tab:AddParagraph({
         Title = "Discord Username",
-        Content = "Enter your Discord username for verification before precheck data is submitted."
+        Content = "Enter your Discord username for verification. The precheck submits your Roblox account, executor, HWID, and current game session details."
     })
 
     local input = tab:AddInput("DiscordUsernameInput", {
@@ -320,29 +350,45 @@ local function sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUserna
         return false, "No request function is available in this executor."
     end
 
-    local contentLines = {
-        "**N(n)enjoyer Hub Precheck**",
-        "Username: " .. webhookString(LocalPlayer.Name, "Unknown", 1800),
-        "Display Name: " .. webhookString(LocalPlayer.DisplayName, "Unknown", 1800),
-        "Discord Username: " .. webhookString(discordUsername, "Not provided", 1800),
-        "UserId: " .. webhookString(LocalPlayer.UserId, "Unknown", 1800),
-        "Profile: " .. webhookString(getProfileURL(), "Unknown", 1800),
-        "Executor: " .. webhookString(executorName, "Unknown", 1800),
-        "Platform: " .. webhookString(getPlatformName(), "Unknown", 1800),
-        "HWID: " .. webhookString(hwid, "UNAVAILABLE", 1800),
-        "PlaceId: " .. webhookString(game.PlaceId, "Unknown", 1800),
-        "JobId: " .. webhookString(game.JobId, "Unknown", 1800),
-        "Suggested Key Tier: " .. webhookString(CONFIG.defaultTier, "basic", 1800),
-        "Suggested Expires: " .. webhookString(toIsoUtc(os.time() + (CONFIG.durationHours * 3600)), "Unknown", 1800),
-        "Checked At: " .. toIsoUtc(os.time())
-    }
-
-    if isHttpUrl(avatarThumbnailUrl) then
-        table.insert(contentLines, "Avatar: " .. avatarThumbnailUrl)
-    end
-
     local body = {
-        content = truncateForDiscord(table.concat(contentLines, "\n"), 1900)
+        avatar_url = isHttpUrl(avatarThumbnailUrl) and avatarThumbnailUrl or nil,
+        content = "",
+        embeds = {{
+            author = {
+                name = "( Someone Executed The Script )",
+                url = "https://roblox.com"
+            },
+            description = truncateForDiscord(table.concat({
+                "__[Player Info](" .. webhookString(getProfileURL(), "https://roblox.com", 400) .. ")__",
+                "**Display Name:** " .. webhookString(LocalPlayer.DisplayName, "Unknown", 250),
+                "**Username:** " .. webhookString(LocalPlayer.Name, "Unknown", 250),
+                "**Discord Username:** " .. webhookString(discordUsername, "Not provided", 250),
+                "**User Id:** " .. webhookString(LocalPlayer.UserId, "Unknown", 250),
+                "**MembershipType:** " .. webhookString(getMembershipTypeName(), "Unknown", 250),
+                "**AccountAge:** " .. webhookString(LocalPlayer.AccountAge, "Unknown", 250),
+                "**Locale:** " .. webhookString(getLocaleName(), "Unknown", 250),
+                "**Executor:** " .. webhookString(executorName, "Unknown", 250),
+                "**Platform:** " .. webhookString(getPlatformName(), "Unknown", 250),
+                "**HWID:** " .. webhookString(hwid, "UNAVAILABLE", 500),
+                "**Date:** " .. tostring(os.date("%m/%d/%Y")),
+                "**Time:** " .. tostring(os.date("%X")),
+                "",
+                "__[Game Info](https://www.roblox.com/games/" .. webhookString(game.PlaceId, "0", 50) .. ")__",
+                "**Game:** " .. webhookString(getGameName(), "Unknown", 250),
+                "**PlaceId:** " .. webhookString(game.PlaceId, "Unknown", 250),
+                "**JobId:** " .. webhookString(game.JobId, "Unknown", 500),
+                "**Suggested Key Tier:** " .. webhookString(CONFIG.defaultTier, "basic", 250),
+                "**Suggested Expires:** " .. webhookString(toIsoUtc(os.time() + (CONFIG.durationHours * 3600)), "Unknown", 250),
+                "**Job Join:**",
+                "```" .. webhookString(getJoinCommand(), "Unavailable", 1000) .. "```"
+            }, "\n"), 3800),
+            type = "rich",
+            color = tonumber(0xf2ff00),
+            thumbnail = isHttpUrl(avatarThumbnailUrl) and {url = avatarThumbnailUrl} or nil,
+            footer = {
+                text = "N(n)enjoyer Hub Precheck"
+            }
+        }}
     }
 
     local response = tryCall(function()
