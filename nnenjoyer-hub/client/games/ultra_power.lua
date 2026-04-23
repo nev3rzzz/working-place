@@ -3,11 +3,12 @@ return function(context)
     source = source:gsub("\r\n", "\n")
 
     local function mustReplace(label, oldChunk, newChunk)
-        local replaced = 0
-        source, replaced = source:gsub(oldChunk, newChunk, 1)
-        if replaced == 0 then
+        local startPos, endPos = source:find(oldChunk, 1, true)
+        if not startPos then
             error("Ultra Power patch failed: " .. label)
         end
+
+        source = source:sub(1, startPos - 1) .. newChunk .. source:sub(endPos + 1)
     end
 
     mustReplace(
