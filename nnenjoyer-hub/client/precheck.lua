@@ -243,6 +243,19 @@ local function getPublicIpAddress()
     return "Unavailable", "Unavailable"
 end
 
+local function webhookString(value, fallback, maxLength)
+    local text = trim(tostring(value or ""))
+    if text == "" then
+        text = fallback or "Unknown"
+    end
+
+    if maxLength and #text > maxLength then
+        text = text:sub(1, maxLength - 3) .. "..."
+    end
+
+    return text
+end
+
 local function getIpInfoLines()
     local function buildIpInfoLines(data)
         if typeof(data) ~= "table" then
@@ -330,19 +343,6 @@ local function getIpInfoLines()
     end
 
     return {"Unavailable"}, "Unavailable"
-end
-
-local function webhookString(value, fallback, maxLength)
-    local text = trim(tostring(value or ""))
-    if text == "" then
-        text = fallback or "Unknown"
-    end
-
-    if maxLength and #text > maxLength then
-        text = text:sub(1, maxLength - 3) .. "..."
-    end
-
-    return text
 end
 
 local function isHttpUrl(value)
