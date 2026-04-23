@@ -35,6 +35,6 @@ Example:
 ```lua
 [1234567890] = {
     name = "Another Game",
-    url = "https://raw.githubusercontent.com/USERNAME/REPO/main/client/games/another_game.lua"
+    url = "https://raw.githubusercontent.com/USERNAME/REPO/main/nnenjoyer-hub/client/games/another_game.lua"
 }
 ```
