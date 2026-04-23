@@ -186,6 +186,22 @@ local function requestJson(url, method, body)
             return nil, trim(responseBody)
         end
 
+        if statusCode == 404 then
+            return nil, "Key not found."
+        end
+
+        if statusCode == 403 then
+            return nil, "Access denied."
+        end
+
+        if statusCode == 401 then
+            return nil, "Unauthorized."
+        end
+
+        if statusCode == 400 then
+            return nil, "Invalid request."
+        end
+
         return nil, "The backend returned an error."
     end
 
