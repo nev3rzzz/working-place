@@ -216,9 +216,20 @@ local function normalizeFailureMessage(message)
     local normalized = trim(tostring(message or ""))
     local lower = string.lower(normalized)
 
-    if lower == "key not found." or lower == "user mismatch." or lower == "device mismatch." or
-        lower == "key is bound to another user." or lower == "key is bound to another device." then
-        return "Verification required."
+    if lower == "key not found." then
+        return "Verification required: key not found."
+    end
+
+    if lower == "device mismatch." or lower == "key is bound to another device." then
+        return "Verification required: wrong HWID."
+    end
+
+    if lower == "user mismatch." or lower == "key is bound to another user." then
+        return "Verification required: wrong user."
+    end
+
+    if lower == "access denied." then
+        return "Verification required: wrong HWID or key not found."
     end
 
     if string.find(lower, "not allowed in placeid", 1, true) or
