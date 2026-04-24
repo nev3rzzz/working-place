@@ -1,0 +1,450 @@
+return function(context)
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local Workspace = game:GetService("Workspace")
+    local UserInputService = game:GetService("UserInputService")
+    local Lighting = game:GetService("Lighting")
+
+    local LocalPlayer = context.LocalPlayer or Players.LocalPlayer
+    local Camera = Workspace.CurrentCamera
+    local authTier = tostring(context.Auth and context.Auth.tier or "basic")
+    local authStartsDisplay = tostring(context.Auth and context.Auth.startsAt or "")
+    local authExpiresDisplay = tostring(context.Auth and context.Auth.expiresAt or "")
+
+    if authStartsDisplay == "" then
+        authStartsDisplay = "Immediate"
+    end
+
+    if authExpiresDisplay == "" then
+        authExpiresDisplay = "No expiry"
+    end
+
+    local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+
+    local window = Fluent:CreateWindow({
+        Title = context.WindowTitle or "N(n)enjoyer Hub",
+        SubTitle = "Bite By Night",
+        TabWidth = 160,
+        Size = UDim2.fromOffset(660, 560),
+        Acrylic = false,
+        Theme = "Dark",
+        MinimizeKey = Enum.KeyCode.RightAlt
+    })
+
+    local tabs = {
+        Home = window:AddTab({
+            Title = "Home",
+            Icon = "home"
+        }),
+        Main = window:AddTab({
+            Title = "Main",
+            Icon = "zap"
+        }),
+        Survivor = window:AddTab({
+            Title = "Survivor",
+            Icon = "shield"
+        }),
+        Visual = window:AddTab({
+            Title = "Visual",
+            Icon = "eye"
+        }),
+        Teleport = window:AddTab({
+            Title = "Teleport",
+            Icon = "map-pinned"
+        }),
+        Others = window:AddTab({
+            Title = "Others",
+            Icon = "wrench"
+        }),
+        Settings = window:AddTab({
+            Title = "Settings",
+            Icon = "settings"
+        })
+    }
+
+    local function notify(title, content)
+        Fluent:Notify({
+            Title = title,
+            Content = content,
+            Duration = 4
+        })
+    end
+
+    local function getCharacter()
+        return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    end
+
+    local function getHumanoid()
+        local character = getCharacter()
+        return character and character:FindFirstChildOfClass("Humanoid")
+    end
+
+    local function getRoot()
+        local character = getCharacter()
+        return character and character:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function getPlayersFolder()
+        return Workspace:FindFirstChild("PLAYERS")
+    end
+
+    local function getCamera()
+        return Workspace.CurrentCamera or Camera
+    end
+
+    local function lerpMoveShared(targetCF)
+        local root = getRoot()
+        if not root then
+            return
+        end
+
+        local startCF = root.CFrame
+        local dist = (startCF.Position - targetCF.Position).Magnitude
+        if dist < 1 then
+            root.CFrame = targetCF
+            return
+        end
+
+        local duration = dist / 25
+        local elapsed = 0
+
+        while elapsed < duration do
+            elapsed += RunService.Heartbeat:Wait()
+            local alpha = math.clamp(elapsed / duration, 0, 1)
+            root.CFrame = startCF:Lerp(targetCF, alpha)
+        end
+
+        root.CFrame = targetCF
+    end
+
+    local function getMyTeamFolder()
+        local character = LocalPlayer.Character
+        if not character then
+            return nil
+        end
+
+        local playersFolder = getPlayersFolder()
+        local aliveFolder = playersFolder and playersFolder:FindFirstChild("ALIVE")
+        local killerFolder = playersFolder and playersFolder:FindFirstChild("KILLER")
+
+        if aliveFolder and character.Parent == aliveFolder then
+            return "ALIVE"
+        end
+
+        if killerFolder and character.Parent == killerFolder then
+            return "KILLER"
+        end
+
+        return nil
+    end
+
+    local function getOrderedGenerators()
+        local mapsFolder = Workspace:FindFirstChild("MAPS")
+        if not mapsFolder then
+            return {}
+        end
+
+        local gameMap = mapsFolder:FindFirstChild("GAME MAP")
+        if not gameMap then
+            return {}
+        end
+
+        local generators = gameMap:FindFirstChild("Generators")
+        if not generators then
+            return {}
+        end
+
+        local models = {}
+        for _, value in ipairs(generators:GetChildren()) do
+            if value:IsA("Model") then
+                models[#models + 1] = value
+            end
+        end
+
+        table.sort(models, function(a, b)
+            return (a:GetAttribute("Order") or 0) < (b:GetAttribute("Order") or 0)
+        end)
+
+        return models
+    end
+
+    local function teleportToModel(model)
+        if not model then
+            return
+        end
+
+        local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+        if not part then
+            return
+        end
+
+        lerpMoveShared(part.CFrame * CFrame.new(0, 0, -5))
+    end
+
+    local function supportsDrawing()
+        return type(Drawing) == "table" and type(Drawing.new) == "function"
+    end
+
+    local infiniteSprint = false
+    local sprintConn = nil
+
+    local jumpBoost = false
+    local jumpPowerConn = nil
+    local jumpCharacterConn = nil
+
+    local aimlockEnabled = false
+    local lockedTarget = nil
+    local aimlockBind = Enum.UserInputType.MouseButton2
+    local aimlockInputConn = nil
+    local aimlockRenderConn = nil
+
+    local noclipEnabled = false
+    local noclipConn = nil
+
+    local oldLighting = {}
+
+    local freeCamEnabled = false
+    local freeCamConn = nil
+    local freeCamPart = nil
+    local savedCharCFrame = nil
+
+    local autogen = false
+    local autoGeneratorConn = nil
+    local autoGeneratorFireConn = nil
+    local lastAutoGeneratorFireTime = 0
+    local generatorMode = "Blatant"
+    local customGeneratorDelay = 3
+
+    local autoEscape = false
+    local autoEscapeConn = nil
+
+    local autoBarricadeEnabled = false
+    local autoBarricadeConn = nil
+
+    local instantInteract = false
+    local promptConnections = {}
+
+    local safeTeleport = false
+    local safePart = nil
+
+    local viewKiller = false
+    local killerAddedConn = nil
+    local killerRemovedConn = nil
+
+    local autoParryEnabled = false
+    local autoParryConn = nil
+    local basicAttackRange = 20
+    local pullAttackRange = 50
+
+    local antiDeath = {
+        enabled = false,
+        threshold = 30,
+        conn = nil,
+        lastPos = nil,
+        teleported = false,
+        debounce = false,
+        plate = nil
+    }
+
+    local espMethod = "Highlight"
+    local esp = {
+        survivors = {},
+        killers = {},
+        generators = {},
+        survivorAdd = nil,
+        survivorRemove = nil,
+        killerAdd = nil,
+        killerRemove = nil,
+        genAdd = nil,
+        genRemove = nil
+    }
+
+    local batteryHighlights = {}
+    local fuseHighlights = {}
+    local trapHighlights = {}
+    local minionHighlights = {}
+    local batteryConn = nil
+    local fuseConn = nil
+    local trapConn = nil
+    local minionConn = nil
+    local playerLabels = {}
+
+    local generatorIndex = 1
+    local batteryIndex = 1
+    local fuseIndex = 1
+
+    local function setInfiniteSprintEnabled(state)
+        infiniteSprint = state == true
+
+        if sprintConn then
+            sprintConn:Disconnect()
+            sprintConn = nil
+        end
+
+        if not infiniteSprint then
+            local character = LocalPlayer.Character
+            if character then
+                character:SetAttribute("WalkSpeed", 12)
+            end
+            notify("Infinite Sprint", "Disabled.")
+            return
+        end
+
+        sprintConn = RunService.Heartbeat:Connect(function()
+            if not infiniteSprint then
+                return
+            end
+
+            local character = LocalPlayer.Character
+            if not character then
+                return
+            end
+
+            local playersFolder = getPlayersFolder()
+            local lobbyFolder = playersFolder and playersFolder:FindFirstChild("LOBBY")
+            if lobbyFolder and character.Parent == lobbyFolder then
+                character:SetAttribute("WalkSpeed", 12)
+                return
+            end
+
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or
+                UserInputService:IsKeyDown(Enum.KeyCode.RightShift) then
+                character:SetAttribute("WalkSpeed", 25)
+            else
+                character:SetAttribute("WalkSpeed", 12)
+            end
+        end)
+
+        notify("Infinite Sprint", "Enabled.")
+    end
+
+    local function setAllowJumpingEnabled(state)
+        jumpBoost = state == true
+
+        if jumpPowerConn then
+            jumpPowerConn:Disconnect()
+            jumpPowerConn = nil
+        end
+
+        if jumpCharacterConn then
+            jumpCharacterConn:Disconnect()
+            jumpCharacterConn = nil
+        end
+
+        local function applyJumpPower()
+            local humanoid = getHumanoid()
+            if not humanoid then
+                return
+            end
+
+            if jumpBoost then
+                if humanoid.UseJumpPower then
+                    humanoid.JumpPower = 1.5
+                else
+                    humanoid.JumpHeight = 1.5
+                end
+            else
+                if humanoid.UseJumpPower then
+                    humanoid.JumpPower = 0
+                else
+                    humanoid.JumpHeight = 0
+                end
+            end
+        end
+
+        applyJumpPower()
+
+        if not jumpBoost then
+            notify("Allow Jumping", "Disabled.")
+            return
+        end
+
+        local humanoid = getHumanoid()
+        if humanoid then
+            jumpPowerConn = humanoid:GetPropertyChangedSignal("JumpPower"):Connect(applyJumpPower)
+        end
+
+        jumpCharacterConn = LocalPlayer.CharacterAdded:Connect(function()
+            task.wait(0.2)
+            if jumpPowerConn then
+                jumpPowerConn:Disconnect()
+                jumpPowerConn = nil
+            end
+            local nextHumanoid = getHumanoid()
+            if nextHumanoid then
+                applyJumpPower()
+                jumpPowerConn = nextHumanoid:GetPropertyChangedSignal("JumpPower"):Connect(applyJumpPower)
+            end
+        end)
+
+        notify("Allow Jumping", "Enabled.")
+    end
+
+    local function parseAimlockBind(text)
+        local formatted = tostring(text or ""):gsub("%s+", "")
+        if formatted == "" then
+            return nil
+        end
+
+        local upper = formatted:upper()
+        local mouseAlias = {
+            M1 = Enum.UserInputType.MouseButton1,
+            M2 = Enum.UserInputType.MouseButton2,
+            RMB = Enum.UserInputType.MouseButton2,
+            LMB = Enum.UserInputType.MouseButton1
+        }
+
+        if mouseAlias[upper] then
+            return mouseAlias[upper]
+        end
+
+        local keycode = Enum.KeyCode[upper]
+        if keycode then
+            return keycode
+        end
+
+        local inputType = Enum.UserInputType[formatted]
+        if inputType then
+            return inputType
+        end
+
+        return nil
+    end
+
+    local function setAimlockEnabled(state)
+        aimlockEnabled = state == true
+        lockedTarget = nil
+
+        if aimlockInputConn then
+            aimlockInputConn:Disconnect()
+            aimlockInputConn = nil
+        end
+
+        if aimlockRenderConn then
+            aimlockRenderConn:Disconnect()
+            aimlockRenderConn = nil
+        end
+
+        if not aimlockEnabled then
+            notify("Aimlock", "Disabled.")
+            return
+        end
+
+        aimlockInputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then
+                return
+            end
+
+            if input.UserInputType ~= aimlockBind and input.KeyCode ~= aimlockBind then
+                return
+            end
+
+            if lockedTarget then
+                lockedTarget = nil
+                return
+            end
+
+            local myTeam = getMyTeamFolder()
+            if not myTeam then
+                return
+            end
