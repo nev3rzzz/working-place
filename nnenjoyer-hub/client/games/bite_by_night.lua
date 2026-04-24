@@ -1,10 +1,10 @@
 return function(context)
     local requestFunction = (syn and syn.request) or request or http_request or (http and http.request)
     local partUrls = {
-        "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night_parts/part01.lua.txt",
-        "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night_parts/part02.lua.txt",
-        "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night_parts/part03.lua.txt",
-        "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night_parts/part04.lua.txt"
+        "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night_parts_v2/part01.lua.txt",
+        "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night_parts_v2/part02.lua.txt",
+        "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night_parts_v2/part03.lua.txt",
+        "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night_parts_v2/part04.lua.txt"
     }
 
     local function downloadText(url)
@@ -48,13 +48,13 @@ return function(context)
     for index, url in ipairs(partUrls) do
         local source = downloadText(url)
         if type(source) ~= "string" or source == "" then
-            error(("Failed to download Bite By Night chunk %d."):format(index))
+            error(("Failed to download Bite By Night v2 chunk %d."):format(index))
         end
 
         parts[index] = source
     end
 
-    local chunk = assert(loadstring(table.concat(parts), "@bite_by_night_impl"))
+    local chunk = assert(loadstring(table.concat(parts), "@bite_by_night_impl_v2"))
     local exported = chunk()
 
     if type(exported) == "function" then
