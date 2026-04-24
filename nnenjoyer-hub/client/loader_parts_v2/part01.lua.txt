@@ -1,0 +1,447 @@
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+local WINDOW_TITLE = "N(n)enjoyer Hub"
+local WINDOW_SUBTITLE = "Loader"
+
+local GLOBAL_ENV = (getgenv and getgenv()) or _G
+local CONFIG = {
+    backendURL = tostring(GLOBAL_ENV.NNEnjoyerBackendURL or ""),
+    redeemPath = tostring(GLOBAL_ENV.NNEnjoyerRedeemPath or "/redeem"),
+    sessionStartPath = tostring(GLOBAL_ENV.NNEnjoyerSessionStartPath or "/session/start"),
+    sessionHeartbeatPath = tostring(GLOBAL_ENV.NNEnjoyerSessionHeartbeatPath or "/session/heartbeat"),
+    sessionStopPath = tostring(GLOBAL_ENV.NNEnjoyerSessionStopPath or "/session/stop"),
+    savedKeyFile = tostring(GLOBAL_ENV.NNEnjoyerSavedKeyFile or "NenjoyerHub/Auth/last_key.txt")
+}
+
+local GAME_LOADERS = {
+    [8146731988] = {
+        name = "Ultra Power",
+        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/ultra_power.lua"
+    },
+    [70845479499574] = {
+        name = "Bite By Night",
+        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night.lua"
+    }
+}
+
+local function tryCall(callback)
+    local ok, value = pcall(callback)
+    if ok then
+        return value
+    end
+
+    return nil
+end
+
+local function trim(value)
+    if typeof(value) ~= "string" then
+        return ""
+    end
+
+    return value:match("^%s*(.-)%s*$") or ""
+end
+
+local function notify(title, text)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 6
+        })
+    end)
+end
+
+local function ensureFoldersForFile(filePath)
+    if not makefolder then
+        return
+    end
+
+    local folderPath = filePath:match("^(.*)[/\\][^/\\]+$")
+    if not folderPath or folderPath == "" then
+        return
+    end
+
+    local current = ""
+    for segment in folderPath:gmatch("[^/\\]+") do
+        current = current == "" and segment or (current .. "/" .. segment)
+        if not isfolder or not isfolder(current) then
+            pcall(makefolder, current)
+        end
+    end
+end
+
+local function readTextFile(filePath)
+    if not (isfile and readfile and filePath ~= "") then
+        return nil
+    end
+
+    if not isfile(filePath) then
+        return nil
+    end
+
+    local content = tryCall(function()
+        return readfile(filePath)
+    end)
+
+    if typeof(content) == "string" then
+        return content
+    end
+
+    return nil
+end
+
+local function getExecutorName()
+    return tryCall(function()
+        if identifyexecutor then
+            return identifyexecutor()
+        end
+    end) or "Unknown"
+end
+
+local function getPlatformName()
+    local platform = tryCall(function()
+        return UserInputService:GetPlatform()
+    end)
+
+    if platform then
+        local platformName = tostring(platform):match("Enum%.Platform%.(.+)")
+        if platformName and platformName ~= "" then
+            return platformName
+        end
+    end
+
+    if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+        return "Mobile"
+    end
+
+    if UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled then
+        return "Console"
+    end
+
+    if UserInputService.KeyboardEnabled then
+        return "Desktop"
+    end
+
+    return "Unknown"
+end
+
+local function writeTextFile(filePath, content)
+    if not (writefile and filePath ~= "") then
+        return
+    end
+
+    ensureFoldersForFile(filePath)
+    pcall(writefile, filePath, content)
+end
+
+local function loadSavedKey()
+    return trim(readTextFile(CONFIG.savedKeyFile) or "")
+end
+
+local function saveKey(key)
+    local normalizedKey = trim(key)
+    if normalizedKey ~= "" then
+        writeTextFile(CONFIG.savedKeyFile, normalizedKey)
+    end
+end
+
+local function getRequestFunction()
+    return (syn and syn.request) or request or http_request or (http and http.request)
+end
+
+local function downloadText(url)
+    local body = tryCall(function()
+        return game:HttpGet(url)
+    end)
+
+    if typeof(body) == "string" and body ~= "" then
+        return body
+    end
+
+    local requestFunction = getRequestFunction()
+    if not requestFunction then
+        return nil
+    end
+
+    local response = tryCall(function()
+        return requestFunction({
+            Url = url,
+            Method = "GET"
+        })
+    end)
+
+    if not response then
+        return nil
+    end
+
+    local statusCode = tonumber(response.StatusCode or response.Status or response.status_code)
+    if statusCode and (statusCode < 200 or statusCode >= 300) then
+        return nil
+    end
+
+    local responseBody = response.Body or response.body or response.ResponseBody
+    if typeof(responseBody) == "string" and responseBody ~= "" then
+        return responseBody
+    end
+
+    return nil
+end
+
+local function requestJson(url, method, body)
+    local requestFunction = getRequestFunction()
+    if not requestFunction then
+        return nil, "No request function is available in this executor."
+    end
+
+    local response = tryCall(function()
+        return requestFunction({
+            Url = url,
+            Method = method or "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = body and HttpService:JSONEncode(body) or nil
+        })
+    end)
+
+    if not response then
+        return nil, "The backend request failed."
+    end
+
+    local statusCode = tonumber(response.StatusCode or response.Status or response.status_code)
+    local responseBody = response.Body or response.body or response.ResponseBody or ""
+    local decoded = tryCall(function()
+        return HttpService:JSONDecode(responseBody)
+    end)
+
+    if statusCode and (statusCode < 200 or statusCode >= 300) then
+        if typeof(decoded) == "table" and trim(tostring(decoded.error or decoded.message or "")) ~= "" then
+            return nil, trim(tostring(decoded.error or decoded.message))
+        end
+
+        if trim(responseBody) ~= "" then
+            return nil, trim(responseBody)
+        end
+
+        if statusCode == 404 then
+            return nil, "Key not found."
+        end
+
+        if statusCode == 403 then
+            return nil, "Access denied."
+        end
+
+        if statusCode == 401 then
+            return nil, "Unauthorized."
+        end
+
+        if statusCode == 400 then
+            return nil, "Invalid request."
+        end
+
+        return nil, "The backend returned an error."
+    end
+
+    if typeof(decoded) ~= "table" then
+        return nil, "The backend returned invalid JSON."
+    end
+
+    return decoded, nil
+end
+
+local function normalizeFailureMessage(message)
+    local normalized = trim(tostring(message or ""))
+    local lower = string.lower(normalized)
+
+    if lower == "key not found." then
+        return "Verification required: key not found."
+    end
+
+    if lower == "device mismatch." or lower == "key is bound to another device." then
+        return "Verification required: wrong HWID."
+    end
+
+    if lower == "user mismatch." or lower == "key is bound to another user." then
+        return "Verification required: wrong user."
+    end
+
+    if lower == "access denied." then
+        return "Verification required: wrong HWID or key not found."
+    end
+
+    if string.find(lower, "not allowed in placeid", 1, true) or
+        string.find(lower, "not allowed in gameid", 1, true) or
+        string.find(lower, "not allowed in the current placeid", 1, true) or
+        string.find(lower, "not allowed in the current gameid", 1, true) then
+        return "Unsupported game."
+    end
+
+    if normalized == "" then
+        return "Access denied."
+    end
+
+    return normalized
+end
+
+local function getBackendUrl(path)
+    local baseUrl = trim(CONFIG.backendURL)
+    if baseUrl == "" then
+        return nil
+    end
+
+    local normalizedPath = trim(path)
+    if normalizedPath == "" then
+        return baseUrl
+    end
+
+    if baseUrl:sub(-1) == "/" then
+        baseUrl = baseUrl:sub(1, -2)
+    end
+
+    if normalizedPath:sub(1, 1) ~= "/" then
+        normalizedPath = "/" .. normalizedPath
+    end
+
+    return baseUrl .. normalizedPath
+end
+
+local function getHWID()
+    local providers = {
+        function()
+            if gethwid then
+                return gethwid()
+            end
+        end,
+        function()
+            if getexecutorhwid then
+                return getexecutorhwid()
+            end
+        end,
+        function()
+            if syn and syn.gethwid then
+                return syn.gethwid()
+            end
+        end
+    }
+
+    for _, provider in ipairs(providers) do
+        local value = tryCall(provider)
+        if typeof(value) == "string" and value ~= "" then
+            return value
+        end
+    end
+
+    return "UNAVAILABLE"
+end
+
+local function loadFluent()
+    local sources = {
+        "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua",
+        "https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"
+    }
+
+    for _, url in ipairs(sources) do
+        local source = downloadText(url)
+        if typeof(source) == "string" and source ~= "" then
+            local chunk = tryCall(function()
+                return loadstring(source)
+            end)
+
+            if type(chunk) == "function" then
+                local library = tryCall(chunk)
+                if type(library) == "table" then
+                    return library
+                end
+            end
+        end
+    end
+
+    error("Failed to load Fluent UI.")
+end
+
+local function redeemKey(key)
+    local backendUrl = getBackendUrl(CONFIG.redeemPath)
+    if not backendUrl then
+        return nil, "NNEnjoyerBackendURL is not configured."
+    end
+
+    return requestJson(backendUrl, "POST", {
+        key = trim(key),
+        userId = tostring(LocalPlayer.UserId),
+        deviceId = getHWID(),
+        placeId = tostring(game.PlaceId),
+        gameId = tostring(game.GameId)
+    })
+end
+
+local function createRuntime()
+    local runtime = {
+        terminated = false,
+        cleanupCallbacks = {},
+        sessionId = nil,
+        heartbeatIntervalSeconds = 25,
+        lastCommandNonce = "",
+        stopStatus = "ended",
+        liveControlWarningShown = false,
+    }
+
+    function runtime:RegisterCleanup(callback)
+        if type(callback) ~= "function" then
+            return
+        end
+
+        if self.terminated then
+            pcall(callback, "terminated")
+            return
+        end
+
+        self.cleanupCallbacks[#self.cleanupCallbacks + 1] = callback
+    end
+
+    function runtime:IsTerminated()
+        return self.terminated == true
+    end
+
+    function runtime:Terminate(reason, options)
+        if self.terminated then
+            return
+        end
+
+        self.terminated = true
+        self.stopStatus = trim(options and options.stopStatus) ~= "" and trim(options and options.stopStatus) or self.stopStatus
+
+        for index = #self.cleanupCallbacks, 1, -1 do
+            pcall(self.cleanupCallbacks[index], reason or "terminated")
+        end
+
+        if not options or options.notify ~= false then
+            notify((options and options.title) or WINDOW_TITLE, reason or "Session ended.")
+        end
+    end
+
+    return runtime
+end
+
+local function buildSessionPayload(authResult, route, runtime)
+    return {
+        sessionId = runtime.sessionId,
+        key = trim(authResult.key),
+        userId = tostring(LocalPlayer.UserId),
+        deviceId = getHWID(),
+        placeId = tostring(game.PlaceId),
+        gameId = tostring(game.GameId),
+        gameName = tostring(route and route.name or "Unknown"),
+        jobId = tostring(game.JobId),
+        executor = getExecutorName(),
+        platform = getPlatformName()
+    }
+end
+
+local function startRuntimeSession(authResult, route, runtime)
+    local backendUrl = getBackendUrl(CONFIG.sessionStartPath)
+    if not back
