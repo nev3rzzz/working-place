@@ -1,0 +1,533 @@
+nn = Workspace.DescendantAdded:Connect(function(value)
+            if value:IsA("MeshPart") and value.Name == "Battery" then
+                local highlight = newHighlight(value, Color3.fromRGB(255, 0, 255))
+                if highlight then
+                    batteryHighlights[value] = highlight
+                end
+            end
+        end)
+
+        notify("Battery ESP", "Enabled.")
+    end
+
+    local function setFuseBoxEspEnabled(state)
+        if fuseConn then
+            fuseConn:Disconnect()
+            fuseConn = nil
+        end
+
+        if not state then
+            clearHighlightTable(fuseHighlights)
+            notify("Fuse Box ESP", "Disabled.")
+            return
+        end
+
+        local mapsFolder = Workspace:FindFirstChild("MAPS")
+        local gameMap = mapsFolder and mapsFolder:FindFirstChild("GAME MAP")
+        local fuseBoxes = gameMap and gameMap:FindFirstChild("FuseBoxes")
+
+        if fuseBoxes then
+            for _, fuseBox in ipairs(fuseBoxes:GetChildren()) do
+                local battery = fuseBox:FindFirstChild("Battery")
+                if battery then
+                    local highlight = newHighlight(battery, Color3.fromRGB(0, 255, 255))
+                    if highlight then
+                        fuseHighlights[battery] = highlight
+                    end
+                end
+            end
+        end
+
+        fuseConn = Workspace.DescendantAdded:Connect(function(value)
+            if value:IsA("BasePart") and value.Name == "Battery" and value.Parent and value.Parent.Name == "FuseBox" then
+                task.wait(0.1)
+                local highlight = newHighlight(value, Color3.fromRGB(0, 255, 255))
+                if highlight then
+                    fuseHighlights[value] = highlight
+                end
+            end
+        end)
+
+        notify("Fuse Box ESP", "Enabled.")
+    end
+
+    local function setTrapEspEnabled(state)
+        if trapConn then
+            trapConn:Disconnect()
+            trapConn = nil
+        end
+
+        if not state then
+            clearHighlightTable(trapHighlights)
+            notify("Bear Trap ESP", "Disabled.")
+            return
+        end
+
+        local ignoreFolder = Workspace:FindFirstChild("IGNORE")
+        if ignoreFolder then
+            for _, object in ipairs(ignoreFolder:GetChildren()) do
+                if object:IsA("Model") and object.Name == "Trap" then
+                    local highlight = newHighlight(object, Color3.fromRGB(255, 100, 0))
+                    if highlight then
+                        trapHighlights[object] = highlight
+                    end
+                end
+            end
+        end
+
+        trapConn = Workspace.DescendantAdded:Connect(function(value)
+            if value:IsA("Model") and value.Name == "Trap" then
+                task.wait(0.1)
+                local highlight = newHighlight(value, Color3.fromRGB(255, 100, 0))
+                if highlight then
+                    trapHighlights[value] = highlight
+                end
+            end
+        end)
+
+        notify("Bear Trap ESP", "Enabled.")
+    end
+
+    local function setMinionEspEnabled(state)
+        if minionConn then
+            minionConn:Disconnect()
+            minionConn = nil
+        end
+
+        if not state then
+            clearHighlightTable(minionHighlights)
+            notify("Minion ESP", "Disabled.")
+            return
+        end
+
+        local ignoreFolder = Workspace:FindFirstChild("IGNORE")
+        if ignoreFolder then
+            for _, object in ipairs(ignoreFolder:GetDescendants()) do
+                if object:IsA("Model") and object.Name == "Minion" then
+                    local highlight = newHighlight(object, Color3.fromRGB(255, 165, 0))
+                    if highlight then
+                        minionHighlights[object] = highlight
+                    end
+                end
+            end
+        end
+
+        minionConn = Workspace.DescendantAdded:Connect(function(value)
+            if value:IsA("Model") and value.Name == "Minion" then
+                local highlight = newHighlight(value, Color3.fromRGB(255, 165, 0))
+                if highlight then
+                    minionHighlights[value] = highlight
+                end
+            end
+        end)
+
+        notify("Minion ESP", "Enabled.")
+    end
+
+    espRenderConn = RunService.RenderStepped:Connect(function()
+        if espMethod ~= "Drawing" and espMethod ~= "Dual" then
+            return
+        end
+
+        for _, targetTable in pairs({esp.survivors, esp.killers, esp.generators}) do
+            for object, data in pairs(targetTable) do
+                if typeof(data) == "table" and data.drawing then
+                    updateDrawingBox(data.drawing, object)
+                elseif type(data) == "userdata" then
+                    updateDrawingBox(data, object)
+                end
+            end
+        end
+    end)
+
+    tabs.Home:AddParagraph({
+        Title = "Welcome",
+        Content = "N(n)enjoyer Hub | Bite By Night\nUse the tabs above to access features."
+    })
+
+    tabs.Main:AddParagraph({
+        Title = "Character Movement",
+        Content = "Movement, camera and combat helpers."
+    })
+
+    tabs.Main:AddToggle("BBNInfiniteSprintToggle", {
+        Title = "Infinite Sprint",
+        Default = false
+    }):OnChanged(setInfiniteSprintEnabled)
+
+    tabs.Main:AddToggle("BBNAllowJumpingToggle", {
+        Title = "Allow Jumping",
+        Default = false
+    }):OnChanged(setAllowJumpingEnabled)
+
+    tabs.Main:AddToggle("BBNAimlockToggle", {
+        Title = "Aimlock",
+        Default = false
+    }):OnChanged(setAimlockEnabled)
+
+    aimlockBindParagraph = tabs.Main:AddParagraph({
+        Title = "Aimlock Bind",
+        Content = getAimlockBindDisplay()
+    })
+
+    tabs.Main:AddButton({
+        Title = "Set Aimlock Bind",
+        Description = "Press a keyboard key or mouse button",
+        Callback = function()
+            beginAimlockBindCapture()
+        end
+    })
+
+    tabs.Main:AddToggle("BBNNoclipToggle", {
+        Title = "Noclip",
+        Default = false
+    }):OnChanged(setNoclipEnabled)
+
+    tabs.Main:AddToggle("BBNFullBrightToggle", {
+        Title = "Full Bright",
+        Default = false
+    }):OnChanged(setFullBrightEnabled)
+
+    tabs.Main:AddToggle("BBNFreeCamToggle", {
+        Title = "Free Cam",
+        Default = false
+    }):OnChanged(setFreeCamEnabled)
+
+    tabs.Survivor:AddParagraph({
+        Title = "Generator",
+        Content = "Automation and survivor utilities."
+    })
+
+    tabs.Survivor:AddDropdown("BBNGeneratorModeDropdown", {
+        Title = "Generator Mode",
+        Values = {"Blatant", "Silent", "Custom"},
+        Multi = false,
+        Default = generatorMode
+    }):OnChanged(function(value)
+        local selected = type(value) == "table" and value[1] or value
+        if type(selected) == "string" and selected ~= "" then
+            generatorMode = selected
+            if autogen then
+                notify("Auto Generator", "Mode: " .. generatorMode)
+            end
+        end
+    end)
+
+    tabs.Survivor:AddInput("BBNGeneratorDelayInput", {
+        Title = "Auto Generator Delay",
+        Default = tostring(customGeneratorDelay),
+        Placeholder = "Custom mode delay in seconds",
+        Numeric = false,
+        Finished = true,
+        Callback = function(value)
+            customGeneratorDelay = tonumber(value) or 3
+            if customGeneratorDelay < 0 then
+                customGeneratorDelay = 0
+            end
+            notify("Auto Generator", "Custom delay: " .. tostring(customGeneratorDelay) .. "s")
+        end
+    })
+
+    tabs.Survivor:AddToggle("BBNAutoGeneratorToggle", {
+        Title = "Auto Generator",
+        Default = false
+    }):OnChanged(setAutoGeneratorEnabled)
+
+    tabs.Survivor:AddToggle("BBNAutoEscapeToggle", {
+        Title = "Auto Escape",
+        Default = false
+    }):OnChanged(setAutoEscapeEnabled)
+
+    tabs.Survivor:AddToggle("BBNAutoBarricadeToggle", {
+        Title = "Auto Barricade",
+        Default = false
+    }):OnChanged(setAutoBarricadeEnabled)
+
+    tabs.Survivor:AddToggle("BBNInstantInteractToggle", {
+        Title = "Instant Interact",
+        Default = false
+    }):OnChanged(setInstantInteractEnabled)
+
+    tabs.Survivor:AddToggle("BBNSafetyAreaToggle", {
+        Title = "Safety Area",
+        Default = false
+    }):OnChanged(setSafetyAreaEnabled)
+
+    tabs.Survivor:AddToggle("BBNViewKillerToggle", {
+        Title = "View Killer",
+        Default = false
+    }):OnChanged(setViewKillerEnabled)
+
+    tabs.Survivor:AddParagraph({
+        Title = "Auto Parry",
+        Content = "Short attack-animation list version from your original script."
+    })
+
+    tabs.Survivor:AddToggle("BBNAutoParryToggle", {
+        Title = "Auto Parry",
+        Default = false
+    }):OnChanged(setAutoParryEnabled)
+
+    tabs.Survivor:AddSlider("BBNBasicAttackRangeSlider", {
+        Title = "Main Attack Range",
+        Default = basicAttackRange,
+        Min = 10,
+        Max = 35,
+        Rounding = 0
+    }):OnChanged(function(value)
+        basicAttackRange = value
+    end)
+
+    tabs.Survivor:AddSlider("BBNPullAttackRangeSlider", {
+        Title = "Ennard Pull Range",
+        Default = pullAttackRange,
+        Min = 10,
+        Max = 60,
+        Rounding = 0
+    }):OnChanged(function(value)
+        pullAttackRange = value
+    end)
+
+    tabs.Survivor:AddParagraph({
+        Title = "Anti Death",
+        Content = "Teleports you into a temporary safe area when HP drops too low."
+    })
+
+    tabs.Survivor:AddToggle("BBNAntiDeathToggle", {
+        Title = "Anti Death",
+        Default = false
+    }):OnChanged(setAntiDeathEnabled)
+
+    tabs.Survivor:AddSlider("BBNAntiDeathThresholdSlider", {
+        Title = "Health Threshold",
+        Default = antiDeath.threshold,
+        Min = 25,
+        Max = 80,
+        Rounding = 1
+    }):OnChanged(function(value)
+        antiDeath.threshold = value
+    end)
+
+    tabs.Visual:AddParagraph({
+        Title = "ESP Settings",
+        Content = "Supports Highlight, Drawing and Dual modes."
+    })
+
+    tabs.Visual:AddDropdown("BBNESPMethodDropdown", {
+        Title = "ESP Method",
+        Values = {"Highlight", "Drawing", "Dual"},
+        Multi = false,
+        Default = espMethod
+    }):OnChanged(function(value)
+        local selected = type(value) == "table" and value[1] or value
+        if type(selected) == "string" and selected ~= "" then
+            espMethod = selected
+            if (espMethod == "Drawing" or espMethod == "Dual") and not supportsDrawing() then
+                notify("ESP Method", "Drawing API unavailable. Using Highlight instead.")
+                espMethod = "Highlight"
+            else
+                notify("ESP Method", "Changed to: " .. espMethod)
+            end
+        end
+    end)
+
+    tabs.Visual:AddToggle("BBNSurvivorESPToggle", {
+        Title = "Survivor ESP",
+        Default = false
+    }):OnChanged(setSurvivorEspEnabled)
+
+    tabs.Visual:AddToggle("BBNKillerESPToggle", {
+        Title = "Killer ESP",
+        Default = false
+    }):OnChanged(setKillerEspEnabled)
+
+    tabs.Visual:AddToggle("BBNGeneratorESPToggle", {
+        Title = "Generator ESP",
+        Default = false
+    }):OnChanged(setGeneratorEspEnabled)
+
+    tabs.Visual:AddToggle("BBNBatteryESPToggle", {
+        Title = "Battery ESP",
+        Default = false
+    }):OnChanged(setBatteryEspEnabled)
+
+    tabs.Visual:AddToggle("BBNFuseBoxESPToggle", {
+        Title = "Fuse Box ESP",
+        Default = false
+    }):OnChanged(setFuseBoxEspEnabled)
+
+    tabs.Visual:AddToggle("BBNTrapESPToggle", {
+        Title = "Bear Trap ESP",
+        Default = false
+    }):OnChanged(setTrapEspEnabled)
+
+    tabs.Visual:AddToggle("BBNMinionESPToggle", {
+        Title = "Minion ESP",
+        Default = false
+    }):OnChanged(setMinionEspEnabled)
+
+    tabs.Teleport:AddParagraph({
+        Title = "Teleport Features",
+        Content = "Smooth teleports between objectives."
+    })
+
+    tabs.Teleport:AddButton({
+        Title = "Generator TP",
+        Description = "Teleport to the next ordered generator",
+        Callback = function()
+            local models = getOrderedGenerators()
+            if #models == 0 then
+                notify("Generator TP", "Wait for match to start.")
+                return
+            end
+
+            teleportToModel(models[generatorIndex])
+            generatorIndex += 1
+            if generatorIndex > #models then
+                generatorIndex = 1
+            end
+        end
+    })
+
+    tabs.Teleport:AddButton({
+        Title = "Battery TP",
+        Description = "Teleport to the next battery",
+        Callback = function()
+            local ignoreFolder = Workspace:FindFirstChild("IGNORE")
+            if not ignoreFolder then
+                notify("Battery TP", "No batteries found.")
+                return
+            end
+
+            local batteries = {}
+            for _, value in ipairs(ignoreFolder:GetDescendants()) do
+                if value:IsA("MeshPart") and value.Name == "Battery" then
+                    batteries[#batteries + 1] = value
+                end
+            end
+
+            if #batteries == 0 then
+                notify("Battery TP", "No batteries found.")
+                return
+            end
+
+            table.sort(batteries, function(a, b)
+                return (a:GetAttribute("Order") or 0) < (b:GetAttribute("Order") or 0)
+            end)
+
+            lerpMoveShared(batteries[batteryIndex].CFrame * CFrame.new(0, 3, 0))
+            batteryIndex += 1
+            if batteryIndex > #batteries then
+                batteryIndex = 1
+            end
+        end
+    })
+
+    tabs.Teleport:AddButton({
+        Title = "Fuse Box TP",
+        Description = "Teleport to the next fuse box battery",
+        Callback = function()
+            local mapsFolder = Workspace:FindFirstChild("MAPS")
+            local gameMap = mapsFolder and mapsFolder:FindFirstChild("GAME MAP")
+            local fuseBoxes = gameMap and gameMap:FindFirstChild("FuseBoxes")
+            if not fuseBoxes then
+                notify("Fuse Box TP", "No fuse boxes found.")
+                return
+            end
+
+            local batteries = {}
+            for _, fuseBox in ipairs(fuseBoxes:GetChildren()) do
+                local battery = fuseBox:FindFirstChild("Battery")
+                if battery and battery:IsA("BasePart") then
+                    batteries[#batteries + 1] = battery
+                end
+            end
+
+            if #batteries == 0 then
+                notify("Fuse Box TP", "No fuse boxes found.")
+                return
+            end
+
+            lerpMoveShared(batteries[fuseIndex].CFrame * CFrame.new(0, 3, 0))
+            fuseIndex += 1
+            if fuseIndex > #batteries then
+                fuseIndex = 1
+            end
+        end
+    })
+
+    tabs.Settings:AddParagraph({
+        Title = "Session",
+        Content = "Player: " .. tostring(LocalPlayer.Name) ..
+            "\nTier: " .. authTier ..
+            "\nStarts: " .. authStartsDisplay ..
+            "\nExpires: " .. authExpiresDisplay ..
+            "\nPlaceId: " .. tostring(context.PlaceId)
+    })
+
+    tabs.Settings:AddParagraph({
+        Title = "Interface",
+        Content = "Minimize GUI: RightAlt"
+    })
+
+    tabs.Settings:AddParagraph({
+        Title = "Notes",
+        Content = "Rayfield version was ported to Fluent UI and adapted to the N(n)enjoyer Hub loader infrastructure."
+    })
+
+    local function shutdown()
+        notificationsMuted = true
+        stopAimlockBindCapture()
+        setInfiniteSprintEnabled(false)
+        setAllowJumpingEnabled(false)
+        setAimlockEnabled(false)
+        setNoclipEnabled(false)
+        setFullBrightEnabled(false)
+        setFreeCamEnabled(false)
+        setAutoGeneratorEnabled(false)
+        setAutoEscapeEnabled(false)
+        setAutoBarricadeEnabled(false)
+        setInstantInteractEnabled(false)
+        if safePart then
+            setSafetyAreaEnabled(false)
+        end
+        setViewKillerEnabled(false)
+        setAutoParryEnabled(false)
+        setAntiDeathEnabled(false)
+        setSurvivorEspEnabled(false)
+        setKillerEspEnabled(false)
+        setGeneratorEspEnabled(false)
+        setBatteryEspEnabled(false)
+        setFuseBoxEspEnabled(false)
+        setTrapEspEnabled(false)
+        setMinionEspEnabled(false)
+
+        if espRenderConn then
+            espRenderConn:Disconnect()
+            espRenderConn = nil
+        end
+
+        pcall(function()
+            if window and window.Destroy then
+                window:Destroy()
+            end
+        end)
+
+        pcall(function()
+            if Fluent and Fluent.Destroy then
+                Fluent:Destroy()
+            end
+        end)
+    end
+
+    if Runtime and Runtime.RegisterCleanup then
+        Runtime:RegisterCleanup(shutdown)
+    end
+
+    updateAimlockBindParagraph()
+    window:SelectTab(1)
+    notify("Bite By Night", "Authorized as " .. authTier .. ".")
+    return {
+        shutdown = shutdown
+    }
+end
