@@ -1,0 +1,332 @@
+endUrl then
+        return nil, "Session start URL is not configured."
+    end
+
+    local payload, errorMessage = requestJson(backendUrl, "POST", buildSessionPayload(authResult, route, runtime))
+    if not payload then
+        return nil, errorMessage
+    end
+
+    runtime.sessionId = trim(payload.sessionId)
+    local heartbeatInterval = tonumber(payload.heartbeatIntervalSeconds)
+    if heartbeatInterval and heartbeatInterval > 0 then
+        runtime.heartbeatIntervalSeconds = heartbeatInterval
+    end
+
+    return payload, nil
+end
+
+local function stopRuntimeSession(runtime)
+    if not runtime or trim(runtime.sessionId) == "" then
+        return
+    end
+
+    local backendUrl = getBackendUrl(CONFIG.sessionStopPath)
+    if not backendUrl then
+        return
+    end
+
+    requestJson(backendUrl, "POST", {
+        sessionId = runtime.sessionId,
+        status = runtime.stopStatus or "ended"
+    })
+end
+
+local function handleRuntimeCommand(runtime, command)
+    if not runtime or runtime:IsTerminated() or typeof(command) ~= "table" then
+        return
+    end
+
+    local nonce = trim(command.nonce)
+    if nonce ~= "" and runtime.lastCommandNonce == nonce then
+        return
+    end
+
+    runtime.lastCommandNonce = nonce
+
+    local commandType = trim(command.type)
+    local message = trim(command.message)
+
+    if commandType == "notify" then
+        notify(WINDOW_TITLE, message ~= "" and message or "Admin notification.")
+        return
+    end
+
+    if commandType == "reauth" then
+        runtime:Terminate(message ~= "" and message or "Session requires re-verification.", {
+            stopStatus = "reauth"
+        })
+        return
+    end
+
+    if commandType == "maintenance" then
+        runtime:Terminate(message ~= "" and message or "Maintenance mode is active.", {
+            stopStatus = "maintenance"
+        })
+        return
+    end
+
+    if commandType == "terminate" then
+        runtime:Terminate(message ~= "" and message or "Access terminated by admin.", {
+            stopStatus = "terminated"
+        })
+    end
+end
+
+local function beginSessionHeartbeat(authResult, route, runtime)
+    if not runtime or trim(runtime.sessionId) == "" then
+        return
+    end
+
+    task.spawn(function()
+        while not runtime:IsTerminated() do
+            task.wait(runtime.heartbeatIntervalSeconds)
+
+            if runtime:IsTerminated() then
+                break
+            end
+
+            local backendUrl = getBackendUrl(CONFIG.sessionHeartbeatPath)
+            if not backendUrl then
+                break
+            end
+
+            local payload, errorMessage = requestJson(
+                backendUrl,
+                "POST",
+                buildSessionPayload(authResult, route, runtime)
+            )
+
+            if payload then
+                handleRuntimeCommand(runtime, payload.command)
+            else
+                local normalizedError = trim(errorMessage)
+                local lowerError = string.lower(normalizedError)
+                if string.find(lowerError, "session not found", 1, true) then
+                    runtime:Terminate("Session expired. Reopen the loader.", {
+                        stopStatus = "session_lost"
+                    })
+                    break
+                end
+
+                if not runtime.liveControlWarningShown and normalizedError ~= "" then
+                    runtime.liveControlWarningShown = true
+                    notify(WINDOW_TITLE, "Live admin sync is temporarily unavailable.")
+                end
+            end
+        end
+
+        stopRuntimeSession(runtime)
+    end)
+end
+
+local function promptForKey()
+    local Fluent = loadFluent()
+    local completed = Instance.new("BindableEvent")
+    local currentValue = loadSavedKey()
+
+    local window = Fluent:CreateWindow({
+        Title = WINDOW_TITLE,
+        SubTitle = WINDOW_SUBTITLE,
+        TabWidth = 160,
+        Size = UDim2.fromOffset(520, 320),
+        Acrylic = false,
+        Theme = "Dark",
+        MinimizeKey = Enum.KeyCode.RightAlt
+    })
+
+    local tab = window:AddTab({
+        Title = "Access",
+        Icon = "lock"
+    })
+
+    local statusParagraph = tab:AddParagraph({
+        Title = "Status",
+        Content = "Enter your access key to continue."
+    })
+
+    local input = tab:AddInput("AccessKeyInput", {
+        Title = "Access Key",
+        Default = currentValue,
+        Placeholder = "Enter access key",
+        Numeric = false,
+        Finished = false,
+        Callback = function(value)
+            currentValue = value
+        end
+    })
+
+    local function setStatus(text)
+        pcall(function()
+            statusParagraph:SetDesc(text)
+        end)
+        pcall(function()
+            if statusParagraph.SetContent then
+                statusParagraph:SetContent(text)
+            end
+        end)
+    end
+
+    local function submit()
+        local key = trim(input.Value or currentValue)
+        if key == "" then
+            setStatus("Enter your access key.")
+            return
+        end
+
+        setStatus("Checking key...")
+
+        task.spawn(function()
+            local payload, errorMessage = redeemKey(key)
+            if payload then
+                saveKey(key)
+                completed:Fire({
+                    key = key,
+                    payload = payload
+                })
+                return
+            end
+
+            setStatus(normalizeFailureMessage(errorMessage))
+        end)
+    end
+
+    tab:AddButton({
+        Title = "Unlock",
+        Description = "Redeem and validate this key",
+        Callback = submit
+    })
+
+    window:SelectTab(1)
+
+    local result = completed.Event:Wait()
+
+    completed:Destroy()
+
+    pcall(function()
+        if window and window.Destroy then
+            window:Destroy()
+        end
+    end)
+
+    pcall(function()
+        if Fluent and Fluent.Destroy then
+            Fluent:Destroy()
+        end
+    end)
+
+    return result
+end
+
+local function buildContext(authResult, route, runtime)
+    return {
+        Auth = authResult.payload,
+        Key = authResult.key,
+        Runtime = runtime,
+        Session = {
+            id = runtime and runtime.sessionId or nil
+        },
+        GameName = route and route.name or "Unknown",
+        PlaceId = game.PlaceId,
+        GameId = game.GameId,
+        Players = Players,
+        LocalPlayer = LocalPlayer,
+        HttpService = HttpService,
+        UserInputService = UserInputService,
+        WindowTitle = WINDOW_TITLE,
+        WindowSubtitle = WINDOW_SUBTITLE
+    }
+end
+
+local function executeRoute(route, context)
+    local source = downloadText(route.url)
+    if typeof(source) ~= "string" or source == "" then
+        notify(WINDOW_TITLE, "Failed to download the game script.")
+        return nil, false
+    end
+
+    local chunk = tryCall(function()
+        return loadstring(source, "@" .. route.url)
+    end)
+
+    if type(chunk) ~= "function" then
+        notify(WINDOW_TITLE, "Failed to compile the game script.")
+        return nil, false
+    end
+
+    local ok, exported = pcall(chunk)
+    if not ok then
+        notify(WINDOW_TITLE, "Game script runtime error.")
+        warn(exported)
+        return nil, false
+    end
+
+    if type(exported) == "function" then
+        return exported(context), true
+    end
+
+    if type(exported) == "table" and type(exported.run) == "function" then
+        return exported.run(context), true
+    end
+
+    notify(WINDOW_TITLE, "Game script must return a function or Module.run.")
+    return nil, false
+end
+
+local route = GAME_LOADERS[tonumber(game.PlaceId)]
+if not route then
+    notify(WINDOW_TITLE, "Unsupported game.")
+    return
+end
+
+local authResult = promptForKey()
+if not authResult or not authResult.payload then
+    notify(WINDOW_TITLE, "Verification required.")
+    return
+end
+
+local runtime = createRuntime()
+local sessionPayload, sessionError = startRuntimeSession(authResult, route, runtime)
+if sessionPayload and typeof(sessionPayload.command) == "table" then
+    handleRuntimeCommand(runtime, sessionPayload.command)
+end
+
+if not sessionPayload and trim(sessionError) ~= "" then
+    local lowerError = string.lower(trim(sessionError))
+    if string.find(lowerError, "maintenance", 1, true) then
+        notify(WINDOW_TITLE, trim(sessionError))
+        return
+    end
+
+    if string.find(lowerError, "unauthorized", 1, true) or
+        string.find(lowerError, "key", 1, true) or
+        string.find(lowerError, "device", 1, true) or
+        string.find(lowerError, "user", 1, true) then
+        notify(WINDOW_TITLE, trim(sessionError))
+        return
+    end
+end
+
+if runtime:IsTerminated() then
+    return
+end
+
+local routeContext = buildContext(authResult, route, runtime)
+local routeResult, routeOk = executeRoute(route, routeContext)
+
+if routeOk and type(routeResult) == "table" then
+    if type(routeResult.shutdown) == "function" then
+        runtime:RegisterCleanup(routeResult.shutdown)
+    elseif type(routeResult.destroy) == "function" then
+        runtime:RegisterCleanup(routeResult.destroy)
+    end
+elseif routeOk and type(routeResult) == "function" then
+    runtime:RegisterCleanup(routeResult)
+end
+
+if not routeOk then
+    stopRuntimeSession(runtime)
+    return
+end
+
+beginSessionHeartbeat(authResult, route, runtime)
