@@ -1,0 +1,579 @@
+
+
+        return nil
+    end
+
+    local function moveMouseToViewportPosition(x, y)
+        local targetX = x + cachedGuiInset.X
+        local targetY = y + cachedGuiInset.Y
+
+        if lastMouseTargetX and math.abs(targetX - lastMouseTargetX) < MOUSE_MOVE_EPSILON and
+            math.abs(targetY - lastMouseTargetY) < MOUSE_MOVE_EPSILON then
+            return true
+        end
+
+        lastMouseTargetX = targetX
+        lastMouseTargetY = targetY
+
+        if mousemoverel then
+            local currentMouseLocation = UserInputService:GetMouseLocation()
+            local deltaX = targetX - currentMouseLocation.X
+            local deltaY = targetY - currentMouseLocation.Y
+
+            local success = pcall(function()
+                mousemoverel(deltaX, deltaY)
+            end)
+
+            if success then
+                return true
+            end
+        end
+
+        if mousemoveabs then
+            local success = pcall(function()
+                mousemoveabs(targetX, targetY)
+            end)
+
+            if success then
+                return true
+            end
+        end
+
+        if VirtualInputManager then
+            local success = pcall(function()
+                VirtualInputManager:SendMouseMoveEvent(targetX, targetY, game)
+            end)
+
+            if success then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function updateCameraNearTarget(camera, targetPosition, lookVector)
+        if not camera or not targetPosition or not lookVector then
+            return false
+        end
+
+        local unitLookVector = lookVector.Magnitude > 0 and lookVector.Unit or Vector3.new(0, 0, -1)
+        local cameraHeightOffset = math.max(0.5, targetCameraDistance * 0.2)
+        local cameraOffset = (unitLookVector * -targetCameraDistance) + Vector3.new(0, cameraHeightOffset, 0)
+        local cameraPosition = targetPosition + cameraOffset
+
+        if (camera.CFrame.Position - cameraPosition).Magnitude < CAMERA_POSITION_EPSILON and
+            (camera.Focus.Position - targetPosition).Magnitude < CAMERA_POSITION_EPSILON then
+            return true
+        end
+
+        camera.CFrame = CFrame.lookAt(cameraPosition, targetPosition)
+        camera.Focus = CFrame.new(targetPosition)
+        return true
+    end
+
+    local function setAimMouseAtTargetEnabled(value)
+        aimMouseAtTargetEnabled = value == true
+
+        if aimMouseAtTargetConnection then
+            aimMouseAtTargetConnection:Disconnect()
+            aimMouseAtTargetConnection = nil
+        end
+
+        local camera = Workspace.CurrentCamera
+
+        if not aimMouseAtTargetEnabled then
+            aimUpdateAccumulator = 0
+            resetAimCursorCache()
+
+            if camera and originalCameraType then
+                camera.CameraType = originalCameraType
+            end
+
+            if camera and originalCameraSubject then
+                camera.CameraSubject = originalCameraSubject
+            end
+
+            originalCameraType = nil
+            originalCameraSubject = nil
+            return
+        end
+
+        if not camera then
+            notify("Targeting", "CurrentCamera was not found.")
+            aimMouseAtTargetEnabled = false
+            if aimMouseToggleControl and aimMouseToggleControl.SetValue then
+                pcall(function()
+                    aimMouseToggleControl:SetValue(false)
+                end)
+            end
+            return
+        end
+
+        lastDeadTargetCharacter = nil
+        aimUpdateAccumulator = 0
+        resetAimCursorCache()
+        originalCameraType = camera.CameraType
+        originalCameraSubject = camera.CameraSubject
+        camera.CameraType = Enum.CameraType.Scriptable
+
+        local function aimAtSelectedTargetTick()
+            local targetPlayer = resolveSelectedTargetPlayer()
+            if not targetPlayer then
+                if aimMouseAtTargetEnabled then
+                    notify("Targeting", "Target left the game. Auto aim disabled.")
+                    if aimMouseToggleControl and aimMouseToggleControl.SetValue then
+                        pcall(function()
+                            aimMouseToggleControl:SetValue(false)
+                        end)
+                    else
+                        setAimMouseAtTargetEnabled(false)
+                    end
+                end
+                return
+            end
+
+            local character = targetPlayer.Character
+            if character ~= cachedTargetCharacter or not cachedTargetHumanoid then
+                refreshTargetCharacterCache(character)
+            end
+
+            local humanoid = cachedTargetHumanoid
+            if humanoid and humanoid.Health <= 0 then
+                if lastDeadTargetCharacter ~= character then
+                    lastDeadTargetCharacter = character
+                    notify("Targeting", targetPlayer.Name .. " died.")
+                end
+                return
+            end
+
+            if character ~= lastDeadTargetCharacter then
+                lastDeadTargetCharacter = nil
+            end
+
+            local currentCamera = Workspace.CurrentCamera
+            local targetPosition = getTargetAimPosition(targetPlayer)
+            local lookVector = getTargetLookVector(targetPlayer)
+            if not currentCamera or not targetPosition or not lookVector then
+                return
+            end
+
+            updateCameraNearTarget(currentCamera, targetPosition, lookVector)
+
+            local screenPoint, onScreen = currentCamera:WorldToViewportPoint(targetPosition)
+            if onScreen and screenPoint.Z > 0 then
+                moveMouseToViewportPosition(screenPoint.X, screenPoint.Y)
+            end
+        end
+
+        aimMouseAtTargetConnection = RunService.RenderStepped:Connect(function(deltaTime)
+            if aimMouseAtTargetEnabled then
+                aimUpdateAccumulator += deltaTime
+                if aimUpdateAccumulator < AIM_UPDATE_INTERVAL then
+                    return
+                end
+
+                aimUpdateAccumulator = 0
+                aimAtSelectedTargetTick()
+            end
+        end)
+    end
+
+    tabs.Movement:AddParagraph({
+        Title = "Movement",
+        Content = "Character movement and recovery controls."
+    })
+
+    tabs.Movement:AddButton({
+        Title = "Check JumpPower",
+        Description = "Show current jump settings",
+        Callback = function()
+            task.spawn(checkJumpPower)
+        end
+    })
+
+    tabs.Movement:AddSlider("UltraPowerJumpPowerSlider", {
+        Title = "JumpPower",
+        Default = jumpPowerValue,
+        Min = 0,
+        Max = 300,
+        Rounding = 0
+    }):OnChanged(function(value)
+        jumpPowerValue = value
+        task.spawn(function()
+            setJumpPower(value)
+        end)
+    end)
+
+    tabs.Movement:AddButton({
+        Title = "Check WalkSpeed",
+        Description = "Show current walk speed",
+        Callback = function()
+            task.spawn(checkWalkSpeed)
+        end
+    })
+
+    tabs.Movement:AddSlider("UltraPowerWalkSpeedSlider", {
+        Title = "WalkSpeed",
+        Default = walkSpeedValue,
+        Min = 0,
+        Max = 300,
+        Rounding = 0
+    }):OnChanged(function(value)
+        walkSpeedValue = value
+        task.spawn(function()
+            setWalkSpeed(value)
+        end)
+    end)
+
+    tabs.Movement:AddToggle("UltraPowerLongFallToggle", {
+        Title = "Auto Reset On Long Fall",
+        Default = false
+    }):OnChanged(function(value)
+        setAutoResetLongFallEnabled(value)
+    end)
+
+    tabs.Tools:AddParagraph({
+        Title = "Tools",
+        Content = "Tool collection, equip limit, and activation controls."
+    })
+
+    tabs.Tools:AddButton({
+        Title = "Get All Tools",
+        Description = "Collect every BasicPowerSpawn tool",
+        Callback = function()
+            task.spawn(getAllTools)
+        end
+    })
+
+    tabs.Tools:AddSlider("UltraPowerEquippedToolCountSlider", {
+        Title = "Equipped Tool Count",
+        Default = equippedToolCount,
+        Min = 0,
+        Max = 20,
+        Rounding = 0
+    }):OnChanged(function(value)
+        equippedToolCount = value
+    end)
+
+    tabs.Tools:AddButton({
+        Title = "Equip First Tools",
+        Description = "Equip only the first selected amount of tools",
+        Callback = function()
+            task.spawn(equipConfiguredTools)
+        end
+    })
+
+    equipBindParagraph = tabs.Tools:AddParagraph({
+        Title = "Equip Bind",
+        Content = "None"
+    })
+
+    tabs.Tools:AddButton({
+        Title = "Set Equip Bind",
+        Description = "Open a small popup to set the Equip First Tools bind",
+        Callback = function()
+            beginBindCapture("equip", "Set Equip First Tools Bind")
+        end
+    })
+
+    tabs.Tools:AddButton({
+        Title = "Use All Equipped Tools",
+        Description = "Activate every currently equipped tool once",
+        Callback = function()
+            task.spawn(function()
+                equipConfiguredTools()
+                task.wait()
+                activateAllEquippedTools()
+            end)
+        end
+    })
+
+    tabs.Tools:AddToggle("UltraPowerUseAllToolsOnClickToggle", {
+        Title = "Use All Tools On Click",
+        Default = false
+    }):OnChanged(function(value)
+        setUseAllToolsOnClickEnabled(value)
+    end)
+
+    tabs.Targeting:AddParagraph({
+        Title = "Targeting",
+        Content = "These options come from the new Fluent variant. They follow the selected player with camera and cursor."
+    })
+
+    local initialTargetOptions = getTargetablePlayerNames()
+    selectedTargetPlayerName = initialTargetOptions[1]
+
+    targetPlayerDropdown = tabs.Targeting:AddDropdown("UltraPowerTargetPlayerDropdown", {
+        Title = "Target Player",
+        Values = initialTargetOptions,
+        Multi = false,
+        Default = selectedTargetPlayerName
+    })
+
+    targetPlayerDropdown:OnChanged(function(value)
+        selectedTargetPlayerName = normalizeDropdownValue(value)
+        invalidateTargetCache()
+        lastDeadTargetCharacter = nil
+        resetAimCursorCache()
+    end)
+
+    tabs.Targeting:AddButton({
+        Title = "Refresh Player List",
+        Description = "Refresh online players for target selection",
+        Callback = function()
+            refreshTargetPlayerDropdown()
+        end
+    })
+
+    tabs.Targeting:AddDropdown("UltraPowerAimTargetPartDropdown", {
+        Title = "Aim Target Part",
+        Values = {"Head", "HumanoidRootPart", CENTER_MASS_AIM_MODE},
+        Multi = false,
+        Default = targetAimPartMode
+    }):OnChanged(function(value)
+        local selected = normalizeDropdownValue(value)
+        if selected and selected ~= "" then
+            targetAimPartMode = selected
+        end
+    end)
+
+    tabs.Targeting:AddSlider("UltraPowerTargetCameraDistanceSlider", {
+        Title = "Target Camera Distance",
+        Default = targetCameraDistance,
+        Min = 0.5,
+        Max = 100,
+        Rounding = 1
+    }):OnChanged(function(value)
+        targetCameraDistance = value
+    end)
+
+    aimMouseToggleControl = tabs.Targeting:AddToggle("UltraPowerAimCursorFollowToggle", {
+        Title = "Aim Cursor + Follow Camera",
+        Default = false
+    })
+
+    aimMouseToggleControl:OnChanged(function(value)
+        setAimMouseAtTargetEnabled(value)
+    end)
+
+    aimBindParagraph = tabs.Targeting:AddParagraph({
+        Title = "Aim Bind",
+        Content = "None"
+    })
+
+    tabs.Targeting:AddButton({
+        Title = "Set Aim Bind",
+        Description = "Open a small popup to set the targeting bind",
+        Callback = function()
+            beginBindCapture("aim", "Set Aim Cursor + Follow Camera Bind")
+        end
+    })
+
+    tabs.Tycoon:AddParagraph({
+        Title = "Tycoon Automation",
+        Content = "Functions below were carried over from your new variant and adapted for the separate Ultra Power game script."
+    })
+
+    tabs.Tycoon:AddToggle("UltraPowerRemoveLaserDoorsToggle", {
+        Title = "Remove Laser Doors",
+        Default = false
+    }):OnChanged(function(value)
+        task.spawn(function()
+            setLaserDoorsDisabled(value)
+        end)
+    end)
+
+    tabs.Tycoon:AddToggle("UltraPowerAutoCollectCashToggle", {
+        Title = "Auto Collect Cash",
+        Default = false
+    }):OnChanged(function(value)
+        setAutoCollectCashEnabled(value)
+    end)
+
+    tabs.Tycoon:AddSlider("UltraPowerAutoCollectCashDelaySlider", {
+        Title = "Auto Collect Delay",
+        Default = autoCollectCashDelay,
+        Min = 0.05,
+        Max = 30,
+        Rounding = 2
+    }):OnChanged(function(value)
+        autoCollectCashDelay = value
+    end)
+
+    tabs.Settings:AddParagraph({
+        Title = "Session",
+        Content = "Player: " .. tostring(LocalPlayer.Name) ..
+            "\nTier: " .. authTier ..
+            "\nStarts: " .. authStartsDisplay ..
+            "\nExpires: " .. authExpiresDisplay ..
+            "\nPlaceId: " .. tostring(context.PlaceId)
+    })
+
+    tabs.Settings:AddParagraph({
+        Title = "Interface",
+        Content = "Minimize Bind: RightAlt"
+    })
+
+    playerAddedConn = Players.PlayerAdded:Connect(function()
+        task.defer(refreshTargetPlayerDropdown)
+    end)
+
+    playerRemovingConn = Players.PlayerRemoving:Connect(function(player)
+        if selectedTargetPlayerName == player.Name then
+            selectedTargetPlayerName = nil
+            invalidateTargetCache()
+            lastDeadTargetCharacter = nil
+            resetAimCursorCache()
+            if aimMouseAtTargetEnabled then
+                notify("Targeting", player.Name .. " left the game. Auto aim disabled.")
+                if aimMouseToggleControl and aimMouseToggleControl.SetValue then
+                    pcall(function()
+                        aimMouseToggleControl:SetValue(false)
+                    end)
+                else
+                    setAimMouseAtTargetEnabled(false)
+                end
+            end
+        end
+
+        task.defer(refreshTargetPlayerDropdown)
+    end)
+
+    local function shutdown()
+        notificationsMuted = true
+        pendingBindAction = nil
+        destroyBindCapturePopup()
+        setUseAllToolsOnClickEnabled(false)
+        setLaserDoorsDisabled(false)
+        setAutoCollectCashEnabled(false)
+        setAutoResetLongFallEnabled(false)
+        setAimMouseAtTargetEnabled(false)
+
+        if customBindConnection then
+            customBindConnection:Disconnect()
+            customBindConnection = nil
+        end
+
+        if characterAddedConn then
+            characterAddedConn:Disconnect()
+            characterAddedConn = nil
+        end
+
+        if characterRemovingConn then
+            characterRemovingConn:Disconnect()
+            characterRemovingConn = nil
+        end
+
+        if childAddedConn then
+            childAddedConn:Disconnect()
+            childAddedConn = nil
+        end
+
+        if childRemovingConn then
+            childRemovingConn:Disconnect()
+            childRemovingConn = nil
+        end
+
+        if playerAddedConn then
+            playerAddedConn:Disconnect()
+            playerAddedConn = nil
+        end
+
+        if playerRemovingConn then
+            playerRemovingConn:Disconnect()
+            playerRemovingConn = nil
+        end
+
+        if smoothWindowConnection then
+            smoothWindowConnection:Disconnect()
+            smoothWindowConnection = nil
+        end
+
+        if smoothWindowInputConnection then
+            smoothWindowInputConnection:Disconnect()
+            smoothWindowInputConnection = nil
+        end
+
+        if smoothWindowInputEndConnection then
+            smoothWindowInputEndConnection:Disconnect()
+            smoothWindowInputEndConnection = nil
+        end
+
+        pcall(function()
+            if window and window.Destroy then
+                window:Destroy()
+            end
+        end)
+
+        pcall(function()
+            if Fluent and Fluent.Destroy then
+                Fluent:Destroy()
+            end
+        end)
+    end
+
+    if Runtime and Runtime.RegisterCleanup then
+        Runtime:RegisterCleanup(shutdown)
+    end
+
+    updateBindParagraphs()
+    window:SelectTab(1)
+    setupSmoothWindow()
+
+    customBindConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if pendingBindAction then
+            if input.UserInputType ~= Enum.UserInputType.Keyboard then
+                return
+            end
+
+            if input.KeyCode == Enum.KeyCode.Escape then
+                pendingBindAction = nil
+                destroyBindCapturePopup()
+                notify("Bind Capture", "Cancelled.")
+                return
+            end
+
+            if input.KeyCode == Enum.KeyCode.Backspace or input.KeyCode == Enum.KeyCode.Delete then
+                clearBind(pendingBindAction)
+                pendingBindAction = nil
+                destroyBindCapturePopup()
+                notify("Bind Capture", "Bind cleared.")
+                return
+            end
+
+            local bind = createBindFromInput(input)
+            if not bind then
+                return
+            end
+
+            local actionName = pendingBindAction
+            pendingBindAction = nil
+            assignBind(actionName, bind)
+            destroyBindCapturePopup()
+            notify("Bind Capture", "Bound to " .. bind.code)
+            return
+        end
+
+        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.RightAlt then
+            local now = os.clock()
+            if now - lastMinimizeToggleTime < 0.15 then
+                return
+            end
+
+            lastMinimizeToggleTime = now
+            task.spawn(function()
+                local toggled = toggleWindowVisibility()
+                if not toggled then
+                    notify("Minimize Bind", "The interface is busy right now. Try again in a moment.")
+                end
+            end)
+            return
+        end
+
+        if gameProcessed then
+            return
+        end
+
+        if doesBindMatch(equipFirstToolsBind, input) then
+  
