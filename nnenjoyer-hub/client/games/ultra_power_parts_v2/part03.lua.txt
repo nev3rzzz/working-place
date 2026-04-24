@@ -1,0 +1,604 @@
+al isFreeFalling = humanoid:GetState() == Enum.HumanoidStateType.Freefall
+            local downwardVelocity = rootPart.AssemblyLinearVelocity and rootPart.AssemblyLinearVelocity.Y or
+                rootPart.Velocity.Y
+            local isFallingDownward = downwardVelocity < -2
+
+            if isFreeFalling and isFallingDownward then
+                if not longFallStartTime then
+                    longFallStartTime = os.clock()
+                    return
+                end
+
+                if os.clock() - longFallStartTime >= LONG_FALL_RESET_DURATION then
+                    longFallStartTime = nil
+                    notify("Long Fall Reset", "Freefall exceeded 2 seconds. Resetting character.")
+                    resetCharacterFromLongFall()
+                end
+                return
+            end
+
+            longFallStartTime = nil
+        end)
+    end
+
+    local function getAllOwnedTools()
+        local character = getCharacter()
+        local backpack = getBackpack()
+        local tools = {}
+        local count = 0
+
+        if backpack then
+            for _, tool in ipairs(backpack:GetChildren()) do
+                if tool:IsA("Tool") then
+                    count += 1
+                    tools[count] = tool
+                end
+            end
+        end
+
+        if character then
+            for _, tool in ipairs(character:GetChildren()) do
+                if tool:IsA("Tool") then
+                    count += 1
+                    tools[count] = tool
+                end
+            end
+        end
+
+        return tools, character, backpack
+    end
+
+    local function forceUnequipTools(character)
+        local humanoid = getHumanoid()
+        if humanoid and humanoid.Parent == character then
+            pcall(function()
+                humanoid:UnequipTools()
+            end)
+        end
+    end
+
+    local function setEquippedToolsState(showNotification)
+        local tools, character, backpack = getAllOwnedTools()
+        if not backpack then
+            if showNotification ~= false then
+                notify("Equip Tools", "Backpack was not found.")
+            end
+            return false, 0
+        end
+
+        local equipLimit = math.clamp(math.floor(equippedToolCount), 0, #tools)
+        local equipped = 0
+        local unequipped = 0
+
+        for index = 1, #tools do
+            local tool = tools[index]
+            if index <= equipLimit then
+                if tool.Parent ~= character then
+                    tool.Parent = character
+                    equipped += 1
+                end
+            elseif tool.Parent ~= backpack then
+                tool.Parent = backpack
+                unequipped += 1
+            end
+        end
+
+        if equipLimit <= 0 then
+            forceUnequipTools(character)
+        end
+
+        if showNotification ~= false then
+            notify(
+                "Equip Tools",
+                "Target equipped: " .. tostring(equipLimit) .. " | Equipped now: " .. tostring(equipped) ..
+                    " | Moved back: " .. tostring(unequipped)
+            )
+        end
+
+        return true, equipLimit
+    end
+
+    local function equipConfiguredTools()
+        return setEquippedToolsState(true)
+    end
+
+    local function activateAllEquippedTools()
+        local now = os.clock()
+        if now - lastUseAllToolsTime < 0.15 then
+            return
+        end
+
+        lastUseAllToolsTime = now
+
+        local character = getCharacter()
+        local activated = 0
+
+        for _, child in ipairs(character:GetChildren()) do
+            if child:IsA("Tool") then
+                activated += 1
+                pcall(function()
+                    child:Activate()
+                end)
+            end
+        end
+
+        if activated == 0 then
+            notify("Use All Tools", "No equipped tools were found.")
+        end
+
+        return activated
+    end
+
+    local function activateAllEquippedToolsSilent()
+        local now = os.clock()
+        if now - lastUseAllToolsTime < 0.15 then
+            return
+        end
+
+        lastUseAllToolsTime = now
+
+        local character = getCharacter()
+        local activated = 0
+
+        for _, child in ipairs(character:GetChildren()) do
+            if child:IsA("Tool") then
+                activated += 1
+                pcall(function()
+                    child:Activate()
+                end)
+            end
+        end
+
+        return activated
+    end
+
+    local function setUseAllToolsOnClickEnabled(value)
+        useAllToolsOnClickEnabled = value == true
+
+        if useAllToolsConnection then
+            useAllToolsConnection:Disconnect()
+            useAllToolsConnection = nil
+        end
+
+        if not useAllToolsOnClickEnabled then
+            return
+        end
+
+        useAllToolsConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed or not useAllToolsOnClickEnabled then
+                return
+            end
+
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                local activated = activateAllEquippedToolsSilent()
+                if activated and activated > 0 then
+                    local character = getCharacter()
+                    task.delay(TOOL_USE_RESET_DELAY, function()
+                        local currentLiveCharacter = LocalPlayer.Character
+                        if currentLiveCharacter == character then
+                            forceUnequipTools(character)
+                        elseif currentLiveCharacter then
+                            forceUnequipTools(currentLiveCharacter)
+                        end
+                    end)
+                end
+            end
+        end)
+    end
+
+    local function findLocalTycoon()
+        if localTycoonCache and localTycoonCache.Parent then
+            return localTycoonCache
+        end
+
+        local now = os.clock()
+        if now - lastLocalTycoonRefresh < TYCOON_CACHE_INTERVAL then
+            return nil
+        end
+
+        lastLocalTycoonRefresh = now
+        local tycoonDirectory = Workspace:FindFirstChild("TycoonDirectory")
+        if not tycoonDirectory then
+            localTycoonCache = nil
+            return nil
+        end
+
+        local playerName = LocalPlayer.Name
+        for _, tycoon in ipairs(tycoonDirectory:GetChildren()) do
+            if tycoon:IsA("Model") and string.find(tycoon.Name, playerName, 1, true) then
+                localTycoonCache = tycoon
+                return localTycoonCache
+            end
+        end
+
+        localTycoonCache = nil
+        return nil
+    end
+
+    local function getCachedCollectorTouchPart()
+        local tycoon = findLocalTycoon()
+        if not tycoon then
+            cachedCollectorTycoon = nil
+            cachedCollectorTouchPart = nil
+            return nil
+        end
+
+        if cachedCollectorTycoon ~= tycoon or not cachedCollectorTouchPart or cachedCollectorTouchPart.Parent == nil then
+            cachedCollectorTycoon = tycoon
+            local collector = tycoon:FindFirstChild("BasicCollector")
+            cachedCollectorTouchPart = collector and collector:FindFirstChild("Touch")
+        end
+
+        if cachedCollectorTouchPart and cachedCollectorTouchPart:IsA("BasePart") then
+            return cachedCollectorTouchPart
+        end
+
+        return nil
+    end
+
+    local function hideLaserDoor(laserDoor)
+        if not laserDoor or not laserDoor.Parent or hiddenLaserDoors[laserDoor] then
+            return false
+        end
+
+        hiddenLaserDoors[laserDoor] = laserDoor.Parent
+        laserDoor.Parent = nil
+        return true
+    end
+
+    local function getTycoonDirectory()
+        return Workspace:FindFirstChild("TycoonDirectory")
+    end
+
+    local function disableLaserDoors()
+        local tycoonDirectory = getTycoonDirectory()
+        if not tycoonDirectory then
+            notify("Laser Doors", "TycoonDirectory was not found.")
+            return
+        end
+
+        local hiddenCount = 0
+        for _, descendant in ipairs(tycoonDirectory:GetDescendants()) do
+            if descendant.Name == "doorLasers" then
+                if hideLaserDoor(descendant) then
+                    hiddenCount += 1
+                end
+            end
+        end
+
+        if laserDoorWatcher then
+            laserDoorWatcher:Disconnect()
+            laserDoorWatcher = nil
+        end
+
+        laserDoorWatcher = tycoonDirectory.DescendantAdded:Connect(function(descendant)
+            if laserDoorsDisabled and descendant.Name == "doorLasers" then
+                hideLaserDoor(descendant)
+            end
+        end)
+
+        notify("Laser Doors", "Hidden: " .. tostring(hiddenCount))
+    end
+
+    local function restoreLaserDoors()
+        if laserDoorWatcher then
+            laserDoorWatcher:Disconnect()
+            laserDoorWatcher = nil
+        end
+
+        local restoredCount = 0
+        for laserDoor, originalParent in pairs(hiddenLaserDoors) do
+            if laserDoor and originalParent then
+                laserDoor.Parent = originalParent
+                restoredCount += 1
+            end
+            hiddenLaserDoors[laserDoor] = nil
+        end
+
+        notify("Laser Doors", "Restored: " .. tostring(restoredCount))
+    end
+
+    local function setLaserDoorsDisabled(value)
+        laserDoorsDisabled = value == true
+
+        if laserDoorsDisabled then
+            disableLaserDoors()
+        else
+            restoreLaserDoors()
+        end
+    end
+
+    local function autoCollectCashLoop()
+        if autoCollectCashRunning then
+            return
+        end
+
+        local sessionId = autoCollectCashSession
+        autoCollectCashRunning = true
+
+        while autoCollectCashEnabled and autoCollectCashSession == sessionId do
+            local rootPart = getRootPart()
+            local touchPart = getCachedCollectorTouchPart()
+
+            if rootPart and touchPart and touchPart:IsA("BasePart") then
+                pcall(function()
+                    firetouchinterest(rootPart, touchPart, 0)
+                    task.wait(0.1)
+                    firetouchinterest(rootPart, touchPart, 1)
+                end)
+
+                task.wait(autoCollectCashDelay)
+            else
+                task.wait(math.max(autoCollectCashDelay, IDLE_AUTO_COLLECT_DELAY))
+            end
+        end
+
+        autoCollectCashRunning = false
+    end
+
+    local function setAutoCollectCashEnabled(value)
+        autoCollectCashEnabled = value == true
+        autoCollectCashSession += 1
+
+        if autoCollectCashEnabled then
+            task.spawn(autoCollectCashLoop)
+        end
+    end
+
+    local function collectBasicPowerSpawns()
+        local spawns = {}
+        local count = 0
+        local descendants = Workspace:GetDescendants()
+
+        for index = 1, #descendants do
+            local descendant = descendants[index]
+            if descendant:IsA("Model") and descendant.Name == "BasicPowerSpawn" then
+                local touchPart = descendant:FindFirstChild("touchPart")
+                if touchPart and touchPart:IsA("BasePart") then
+                    count += 1
+                    spawns[count] = touchPart
+                end
+            end
+
+            if index % SCAN_BATCH_SIZE == 0 then
+                task.wait()
+            end
+        end
+
+        return spawns
+    end
+
+    local function getAllTools()
+        if isCollecting then
+            notify("Get All Tools", "Collection is already running.")
+            return
+        end
+
+        local backpack = getBackpack()
+        if not backpack then
+            notify("Get All Tools", "Backpack was not found.")
+            return
+        end
+
+        local rootPart = getRootPart()
+        if not rootPart then
+            notify("Get All Tools", "HumanoidRootPart was not found.")
+            return
+        end
+
+        isCollecting = true
+        local success, errorMessage = xpcall(function()
+            local touchParts = collectBasicPowerSpawns()
+            local touched = 0
+            local failed = 0
+
+            for index = 1, #touchParts do
+                local touchPart = touchParts[index]
+                local touchSuccess = pcall(function()
+                    firetouchinterest(rootPart, touchPart, 0)
+                    task.wait(0.05)
+                    firetouchinterest(rootPart, touchPart, 1)
+                end)
+
+                if touchSuccess then
+                    touched += 1
+                else
+                    failed += 1
+                end
+
+                if index % TOUCH_BATCH_SIZE == 0 then
+                    task.wait()
+                end
+            end
+
+            notify(
+                "Get All Tools",
+                "Touched spawns: " .. tostring(touched) .. " | Failed: " .. tostring(failed)
+            )
+        end, debug.traceback)
+
+        if not success then
+            warn(errorMessage)
+            notify("Get All Tools", "An error occurred while collecting tools.")
+        end
+
+        isCollecting = false
+    end
+
+    local function getTargetablePlayerNames()
+        local options = {}
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                options[#options + 1] = player.Name
+            end
+        end
+
+        table.sort(options)
+        return options
+    end
+
+    local function normalizeDropdownValue(value)
+        if type(value) == "table" then
+            return value[1]
+        end
+
+        return value
+    end
+
+    local function resolveSelectedTargetPlayer()
+        if not selectedTargetPlayerName or selectedTargetPlayerName == "" then
+            invalidateTargetCache()
+            return nil
+        end
+
+        if cachedTargetPlayer and cachedTargetPlayer.Parent == Players and cachedTargetPlayer.Name == selectedTargetPlayerName then
+            return cachedTargetPlayer
+        end
+
+        cachedTargetPlayer = Players:FindFirstChild(selectedTargetPlayerName)
+        invalidateTargetCharacterCache()
+        return cachedTargetPlayer
+    end
+
+    local function refreshTargetPlayerDropdown()
+        if not targetPlayerDropdown then
+            return
+        end
+
+        local options = getTargetablePlayerNames()
+        pcall(function()
+            if targetPlayerDropdown.SetValues then
+                targetPlayerDropdown:SetValues(options)
+            end
+        end)
+
+        if selectedTargetPlayerName and not table.find(options, selectedTargetPlayerName) then
+            selectedTargetPlayerName = nil
+            invalidateTargetCache()
+            lastDeadTargetCharacter = nil
+            resetAimCursorCache()
+        end
+
+        if selectedTargetPlayerName then
+            pcall(function()
+                targetPlayerDropdown:SetValue(selectedTargetPlayerName)
+            end)
+        end
+    end
+
+    local function getTargetAimPosition(targetPlayer)
+        local character = targetPlayer and targetPlayer.Character
+        if not character then
+            invalidateTargetCharacterCache()
+            return nil
+        end
+
+        local shouldRefresh = character ~= cachedTargetCharacter or not cachedTargetRootPart or not cachedTargetHumanoid
+        if targetAimPartMode == "Head" and not cachedTargetHead then
+            shouldRefresh = true
+        end
+
+        if shouldRefresh then
+            refreshTargetCharacterCache(character)
+        end
+
+        local head = cachedTargetHead
+        local humanoidRootPart = cachedTargetRootPart
+        local upperTorso = cachedTargetUpperTorso
+        local torso = cachedTargetTorso
+        local lowerTorso = cachedTargetLowerTorso
+
+        if targetAimPartMode == "Head" then
+            if head then
+                return head.Position
+            end
+
+            if humanoidRootPart then
+                return humanoidRootPart.Position + Vector3.new(0, 1.5, 0)
+            end
+        elseif targetAimPartMode == "HumanoidRootPart" then
+            if humanoidRootPart then
+                return humanoidRootPart.Position + Vector3.new(0, 1.5, 0)
+            end
+
+            if head then
+                return head.Position
+            end
+        elseif targetAimPartMode == CENTER_MASS_AIM_MODE then
+            if upperTorso then
+                return upperTorso.Position
+            end
+
+            if torso then
+                return torso.Position
+            end
+
+            if lowerTorso then
+                return lowerTorso.Position
+            end
+
+            if humanoidRootPart then
+                return humanoidRootPart.Position + Vector3.new(0, 1.0, 0)
+            end
+
+            if head then
+                return head.Position
+            end
+        end
+
+        if head then
+            return head.Position
+        end
+
+        if upperTorso then
+            return upperTorso.Position
+        end
+
+        if torso then
+            return torso.Position
+        end
+
+        if humanoidRootPart then
+            return humanoidRootPart.Position + Vector3.new(0, 1.5, 0)
+        end
+
+        local success, pivot = pcall(function()
+            return character:GetPivot()
+        end)
+
+        if success and pivot then
+            return pivot.Position
+        end
+
+        return nil
+    end
+
+    local function getTargetLookVector(targetPlayer)
+        local character = targetPlayer and targetPlayer.Character
+        if not character then
+            invalidateTargetCharacterCache()
+            return nil
+        end
+
+        if character ~= cachedTargetCharacter or (not cachedTargetRootPart and not cachedTargetHead) then
+            refreshTargetCharacterCache(character)
+        end
+
+        local humanoidRootPart = cachedTargetRootPart
+        if humanoidRootPart then
+            return humanoidRootPart.CFrame.LookVector
+        end
+
+        local head = cachedTargetHead
+        if head then
+            return head.CFrame.LookVector
+        end
+
+        local success, pivot = pcall(function()
+            return character:GetPivot()
+        end)
+
+        if success and pivot then
+            return pivot.LookVector
+        end
