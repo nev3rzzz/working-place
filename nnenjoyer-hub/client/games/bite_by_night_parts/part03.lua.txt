@@ -1,6 +1,10 @@
             return
         end
 
+        if not safePart then
+            return
+        end
+
         local pos = root.Position
         if safePart then
             safePart:Destroy()
@@ -448,3 +452,4 @@
             end
 
             targetTable[object] = nil
+        end
