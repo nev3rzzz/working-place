@@ -38,12 +38,65 @@ local function downloadText(url)
     return responseBody
 end
 
+local function mustReplace(source, oldText, newText, label)
+    local startIndex, endIndex = string.find(source, oldText, 1, true)
+    if not startIndex then
+        error("Ultra Power patch failed: " .. tostring(label))
+    end
+
+    return source:sub(1, startIndex - 1) .. newText .. source:sub(endIndex + 1)
+end
+
 local parts = {}
 for index, url in ipairs(chunkPaths) do
     parts[index] = downloadText(url)
 end
 
-local compiled, compileError = loadstring(table.concat(parts), "@ultra_power_impl_v2")
+local combinedSource = table.concat(parts)
+
+combinedSource = mustReplace(
+    combinedSource,
+    [[        if trackedWindowAnimating then
+            if trackedWindowAnimationStartedAt > 0 and os.clock() - trackedWindowAnimationStartedAt > 0.9 then
+                trackedWindowAnimating = false
+                trackedWindowAnimationStartedAt = 0
+            else
+                return false
+            end
+        end]],
+    [[        if trackedWindowAnimating then
+            trackedWindowAnimating = false
+            trackedWindowAnimationStartedAt = 0
+
+            if trackedWindowFrame then
+                trackedWindowFrame.Visible = true
+                if trackedWindowShownPosition ~= nil then
+                    trackedWindowFrame.Position = trackedWindowShownPosition
+                end
+            end
+
+            if trackedWindowScale then
+                trackedWindowScale.Scale = 1
+            end
+        end]],
+    "trackedWindowAnimating block"
+)
+
+combinedSource = mustReplace(
+    combinedSource,
+    [[            task.spawn(function()
+                local toggled = toggleWindowVisibility()
+                if not toggled then
+                    notify("Minimize Bind", "The interface is busy right now. Try again in a moment.")
+                end
+            end)]],
+    [[            task.spawn(function()
+                toggleWindowVisibility()
+            end)]],
+    "RightAlt minimize handler"
+)
+
+local compiled, compileError = loadstring(combinedSource, "@ultra_power_impl_v2")
 if not compiled then
     error(compileError)
 end
