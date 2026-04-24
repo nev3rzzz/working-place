@@ -1,164 +1,3 @@
-        end
-
-        if playerLabels[object] then
-            if playerLabels[object].healthConn then
-                playerLabels[object].healthConn:Disconnect()
-            end
-            if playerLabels[object].staminaConn then
-                playerLabels[object].staminaConn:Disconnect()
-            end
-            if playerLabels[object].gui then
-                playerLabels[object].gui:Destroy()
-            end
-            playerLabels[object] = nil
-        end
-    end
-
-    local function clearEsp(targetTable)
-        for object, value in pairs(targetTable) do
-            if value then
-                if typeof(value) == "table" then
-                    if value.highlight then
-                        value.highlight:Destroy()
-                    end
-                    if value.drawing then
-                        value.drawing:Remove()
-                    end
-                elseif typeof(value) == "Instance" then
-                    value:Destroy()
-                elseif type(value) == "userdata" and value.Remove then
-                    value:Remove()
-                end
-            end
-
-            targetTable[object] = nil
-
-            if playerLabels[object] then
-                if playerLabels[object].healthConn then
-                    playerLabels[object].healthConn:Disconnect()
-                end
-                if playerLabels[object].staminaConn then
-                    playerLabels[object].staminaConn:Disconnect()
-                end
-                if playerLabels[object].gui then
-                    playerLabels[object].gui:Destroy()
-                end
-                playerLabels[object] = nil
-            end
-        end
-    end
-
-    local function setSurvivorEspEnabled(state)
-        local playersFolder = getPlayersFolder()
-        local aliveFolder = playersFolder and playersFolder:FindFirstChild("ALIVE")
-        if not aliveFolder then
-            notify("Survivor ESP", "Wait for match to start.")
-            return
-        end
-
-        if esp.survivorAdd then
-            esp.survivorAdd:Disconnect()
-            esp.survivorAdd = nil
-        end
-        if esp.survivorRemove then
-            esp.survivorRemove:Disconnect()
-            esp.survivorRemove = nil
-        end
-
-        if not state then
-            clearEsp(esp.survivors)
-            notify("Survivor ESP", "Disabled.")
-            return
-        end
-
-        for _, value in ipairs(aliveFolder:GetChildren()) do
-            if value:IsA("Model") then
-                addEsp(esp.survivors, value, Color3.fromRGB(80, 180, 255))
-            end
-        end
-
-        esp.survivorAdd = aliveFolder.ChildAdded:Connect(function(value)
-            if value:IsA("Model") then
-                addEsp(esp.survivors, value, Color3.fromRGB(80, 180, 255))
-            end
-        end)
-
-        esp.survivorRemove = aliveFolder.ChildRemoved:Connect(function(value)
-            removeEsp(esp.survivors, value)
-        end)
-
-        notify("Survivor ESP", "Enabled.")
-    end
-
-    local function setKillerEspEnabled(state)
-        local playersFolder = getPlayersFolder()
-        local killerFolder = playersFolder and playersFolder:FindFirstChild("KILLER")
-        if not killerFolder then
-            notify("Killer ESP", "Wait for match to start.")
-            return
-        end
-
-        if esp.killerAdd then
-            esp.killerAdd:Disconnect()
-            esp.killerAdd = nil
-        end
-        if esp.killerRemove then
-            esp.killerRemove:Disconnect()
-            esp.killerRemove = nil
-        end
-
-        if not state then
-            clearEsp(esp.killers)
-            notify("Killer ESP", "Disabled.")
-            return
-        end
-
-        for _, value in ipairs(killerFolder:GetChildren()) do
-            if value:IsA("Model") then
-                addEsp(esp.killers, value, Color3.fromRGB(255, 80, 80))
-            end
-        end
-
-        esp.killerAdd = killerFolder.ChildAdded:Connect(function(value)
-            if value:IsA("Model") then
-                addEsp(esp.killers, value, Color3.fromRGB(255, 80, 80))
-            end
-        end)
-
-        esp.killerRemove = killerFolder.ChildRemoved:Connect(function(value)
-            removeEsp(esp.killers, value)
-        end)
-
-        notify("Killer ESP", "Enabled.")
-    end
-
-    local function setGeneratorEspEnabled(state)
-        if esp.genAdd then
-            esp.genAdd:Disconnect()
-            esp.genAdd = nil
-        end
-        if esp.genRemove then
-            esp.genRemove:Disconnect()
-            esp.genRemove = nil
-        end
-
-        if not state then
-            clearEsp(esp.generators)
-            notify("Generator ESP", "Disabled.")
-            return
-        end
-
-        for _, value in ipairs(Workspace:GetDescendants()) do
-            if value:IsA("Model") and value.Name == "Generator" then
-                addEsp(esp.generators, value, Color3.fromRGB(0, 255, 100))
-            end
-        end
-
-        esp.genAdd = Workspace.DescendantAdded:Connect(function(value)
-            if value:IsA("Model") and value.Name == "Generator" then
-                addEsp(esp.generators, value, Color3.fromRGB(0, 255, 100))
-            end
-        end)
 
         esp.genRemove = Workspace.DescendantRemoving:Connect(function(value)
             if esp.generators[value] then
@@ -369,22 +208,16 @@
         Default = false
     }):OnChanged(setAimlockEnabled)
 
-    tabs.Main:AddInput("BBNAimlockBindInput", {
+    aimlockBindParagraph = tabs.Main:AddParagraph({
         Title = "Aimlock Bind",
-        Default = "MouseButton2",
-        Placeholder = "Z, X, MouseButton2, M2",
-        Numeric = false,
-        Finished = true,
-        Callback = function(text)
-            local bind = parseAimlockBind(text)
-            if bind then
-                aimlockBind = bind
-                local bindName = bind.EnumType == Enum.KeyCode and bind.Name or bind.Name
-                notify("Aimlock Bind", "Bind set to: " .. bindName)
-            else
-                aimlockBind = Enum.UserInputType.MouseButton2
-                notify("Aimlock Bind", "Invalid. Reset to MouseButton2.")
-            end
+        Content = getAimlockBindDisplay()
+    })
+
+    tabs.Main:AddButton({
+        Title = "Set Aimlock Bind",
+        Description = "Press a keyboard key or mouse button",
+        Callback = function()
+            beginAimlockBindCapture()
         end
     })
 
@@ -539,7 +372,7 @@
                 notify("ESP Method", "Changed to: " .. espMethod)
             end
         end
-    end)
+    })
 
     tabs.Visual:AddToggle("BBNSurvivorESPToggle", {
         Title = "Survivor ESP",
@@ -666,19 +499,6 @@
         end
     })
 
-    tabs.Others:AddParagraph({
-        Title = "Other Features",
-        Content = "Misc utilities from the original script."
-    })
-
-    tabs.Others:AddButton({
-        Title = "Infinite Yield",
-        Description = "Load Infinite Yield admin commands",
-        Callback = function()
-            loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))()
-        end
-    })
-
     tabs.Settings:AddParagraph({
         Title = "Session",
         Content = "Player: " .. tostring(LocalPlayer.Name) ..
@@ -698,6 +518,7 @@
         Content = "Rayfield version was ported to Fluent UI and adapted to the N(n)enjoyer Hub loader infrastructure."
     })
 
+    updateAimlockBindParagraph()
     window:SelectTab(1)
     notify("Bite By Night", "Authorized as " .. authTier .. ".")
 end
