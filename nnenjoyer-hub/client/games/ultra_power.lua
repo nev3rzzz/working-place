@@ -74,23 +74,6 @@ return function(context)
 ]])
 
     source = mustReplace(source, [[
-        local wantedTexts = {
-            Main = true,
-            Targeting = true,
-            Tycoon = true,
-            Settings = true
-        }
-]], [[
-        local wantedTexts = {
-            Movement = true,
-            Tools = true,
-            Targeting = true,
-            Tycoon = true,
-            Settings = true
-        }
-]])
-
-    source = mustReplace(source, [[
     local smoothWindowConnection = nil
     local smoothWindowInputConnection = nil
     local smoothWindowInputEndConnection = nil
