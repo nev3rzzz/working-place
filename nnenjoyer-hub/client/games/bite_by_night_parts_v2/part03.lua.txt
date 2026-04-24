@@ -1,0 +1,581 @@
+f autoParryConn then
+            autoParryConn:Disconnect()
+            autoParryConn = nil
+        end
+
+        if not autoParryEnabled then
+            notify("Auto Parry", "Disabled.")
+            return
+        end
+
+        local attackAnimations = {
+            "rbxassetid://106673226682917",
+            "rbxassetid://112503015929213",
+            "rbxassetid://120428956410756",
+            "rbxassetid://133752270724243"
+        }
+
+        local function isAttackAnimation(track)
+            if not track or not track.Animation then
+                return false
+            end
+
+            local animationId = track.Animation.AnimationId
+            for _, knownId in ipairs(attackAnimations) do
+                if animationId == knownId then
+                    return true
+                end
+            end
+
+            return false
+        end
+
+        local function getParryRange(track)
+            if not track or not track.Animation then
+                return basicAttackRange
+            end
+
+            if track.Animation.AnimationId == "rbxassetid://133752270724243" then
+                return pullAttackRange
+            end
+
+            return basicAttackRange
+        end
+
+        autoParryConn = RunService.Heartbeat:Connect(function()
+            if not autoParryEnabled then
+                return
+            end
+
+            local myRoot = getRoot()
+            if not myRoot then
+                return
+            end
+
+            for _, otherPlayer in ipairs(Players:GetPlayers()) do
+                if otherPlayer ~= LocalPlayer then
+                    local otherCharacter = otherPlayer.Character
+                    local attackerRoot = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+                    if attackerRoot then
+                        local diff = attackerRoot.Position - myRoot.Position
+                        local distSq = diff:Dot(diff)
+                        if distSq <= basicAttackRange * basicAttackRange then
+                            local humanoid = otherCharacter:FindFirstChildOfClass("Humanoid")
+                            local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+                            if animator then
+                                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                                    if track.IsPlaying and isAttackAnimation(track) then
+                                        local actualRange = getParryRange(track)
+                                        if distSq <= actualRange * actualRange then
+                                            local reliable = game:GetService("ReplicatedStorage")
+                                                :WaitForChild("Modules")
+                                                :WaitForChild("Warp")
+                                                :WaitForChild("Index")
+                                                :WaitForChild("Event")
+                                                :WaitForChild("Reliable")
+                                            reliable:FireServer(
+                                                buffer.fromstring("\a"),
+                                                buffer.fromstring("\254\001\000\254\002\000\006\aAbility\001\002")
+                                            )
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        notify("Auto Parry", "Enabled.")
+    end
+
+    local function returnToLastPos()
+        if antiDeath.plate then
+            antiDeath.plate:Destroy()
+            antiDeath.plate = nil
+        end
+
+        if antiDeath.lastPos then
+            task.spawn(function()
+                lerpMoveShared(antiDeath.lastPos)
+            end)
+        end
+
+        antiDeath.lastPos = nil
+        antiDeath.teleported = false
+    end
+
+    local function setAntiDeathEnabled(state)
+        antiDeath.enabled = state == true
+
+        if antiDeath.conn then
+            antiDeath.conn:Disconnect()
+            antiDeath.conn = nil
+        end
+
+        if not antiDeath.enabled then
+            if antiDeath.teleported then
+                returnToLastPos()
+            end
+            antiDeath.debounce = false
+            notify("Anti Death", "Disabled.")
+            return
+        end
+
+        antiDeath.conn = RunService.Heartbeat:Connect(function()
+            local humanoid = getHumanoid()
+            local root = getRoot()
+            if not humanoid or not root then
+                return
+            end
+
+            if humanoid.Health < antiDeath.threshold and humanoid.Health > 0 and
+                not antiDeath.teleported and not antiDeath.debounce then
+                antiDeath.debounce = true
+                antiDeath.teleported = true
+                antiDeath.lastPos = root.CFrame
+
+                local pos = root.Position
+                antiDeath.plate = Instance.new("Part")
+                antiDeath.plate.Size = Vector3.new(50, 1, 50)
+                antiDeath.plate.Anchored = true
+                antiDeath.plate.Position = pos - Vector3.new(0, 100, 0)
+                antiDeath.plate.Name = "AntiDeathPlate"
+                antiDeath.plate.Parent = Workspace
+
+                task.spawn(function()
+                    lerpMoveShared(CFrame.new(pos - Vector3.new(0, 95, 0)))
+                end)
+
+                task.delay(1, function()
+                    antiDeath.debounce = false
+                end)
+            elseif humanoid.Health >= antiDeath.threshold and antiDeath.teleported and antiDeath.lastPos and
+                not antiDeath.debounce then
+                antiDeath.debounce = true
+                returnToLastPos()
+                task.delay(1, function()
+                    antiDeath.debounce = false
+                end)
+            end
+        end)
+
+        notify("Anti Death", "Enabled.")
+    end
+
+    local function newHighlight(object, color)
+        if not object then
+            return nil
+        end
+
+        local highlight = Instance.new("Highlight")
+        highlight.FillColor = color
+        highlight.FillTransparency = 0.5
+        highlight.OutlineColor = color
+        highlight.OutlineTransparency = 0
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Adornee = object
+        highlight.Parent = object
+        return highlight
+    end
+
+    local function createDrawingBox()
+        if not supportsDrawing() then
+            return nil
+        end
+
+        local box = Drawing.new("Square")
+        box.Thickness = 2
+        box.Filled = false
+        box.Transparency = 1
+        box.Visible = false
+        return box
+    end
+
+    local function updateDrawingBox(box, object)
+        if not box or not object then
+            return
+        end
+
+        local root = object:FindFirstChild("HumanoidRootPart") or object.PrimaryPart
+        local camera = getCamera()
+        if not root or not camera then
+            box.Visible = false
+            return
+        end
+
+        local vector, onScreen = camera:WorldToViewportPoint(root.Position)
+        if onScreen then
+            local topPoint = camera:WorldToViewportPoint(root.Position + Vector3.new(0, 3, 0))
+            local size = (topPoint - vector).Y * 2.5
+            box.Size = Vector2.new(size * 1.2, size)
+            box.Position = Vector2.new(vector.X - box.Size.X / 2, vector.Y - box.Size.Y / 2)
+            box.Visible = true
+        else
+            box.Visible = false
+        end
+    end
+
+    local function createPlayerLabels(character, showHealth)
+        if not character or playerLabels[character] or character == LocalPlayer.Character then
+            return
+        end
+
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not humanoid then
+            return
+        end
+
+        local labelGui = Instance.new("BillboardGui")
+        labelGui.Adornee = character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+        labelGui.Size = UDim2.new(4, 0, 2, 0)
+        labelGui.StudsOffset = Vector3.new(0, 4, 0)
+        labelGui.AlwaysOnTop = true
+        labelGui.LightInfluence = 0
+        labelGui.Parent = character
+
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.fromScale(1, 1)
+        frame.BackgroundTransparency = 1
+        frame.Parent = labelGui
+
+        local healthLabel = nil
+        local staminaLabel = nil
+
+        if showHealth then
+            healthLabel = Instance.new("TextLabel")
+            healthLabel.Size = UDim2.new(1, 0, 0.5, 0)
+            healthLabel.BackgroundTransparency = 1
+            healthLabel.TextStrokeTransparency = 0
+            healthLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+            healthLabel.Font = Enum.Font.GothamBold
+            healthLabel.TextSize = 16
+            healthLabel.Parent = frame
+
+            staminaLabel = Instance.new("TextLabel")
+            staminaLabel.Size = UDim2.new(1, 0, 0.5, 0)
+            staminaLabel.Position = UDim2.new(0, 0, 0.5, 0)
+            staminaLabel.BackgroundTransparency = 1
+            staminaLabel.TextColor3 = Color3.fromRGB(0, 150, 255)
+            staminaLabel.TextStrokeTransparency = 0
+            staminaLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+            staminaLabel.Font = Enum.Font.GothamBold
+            staminaLabel.TextSize = 16
+            staminaLabel.Parent = frame
+        else
+            staminaLabel = Instance.new("TextLabel")
+            staminaLabel.Size = UDim2.fromScale(1, 1)
+            staminaLabel.BackgroundTransparency = 1
+            staminaLabel.TextColor3 = Color3.fromRGB(0, 150, 255)
+            staminaLabel.TextStrokeTransparency = 0
+            staminaLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+            staminaLabel.Font = Enum.Font.GothamBold
+            staminaLabel.TextSize = 16
+            staminaLabel.Parent = frame
+        end
+
+        playerLabels[character] = {
+            gui = labelGui,
+            healthText = healthLabel,
+            staminaText = staminaLabel,
+            healthConn = nil,
+            staminaConn = nil
+        }
+
+        if showHealth and healthLabel then
+            local function updateHealth()
+                if not playerLabels[character] or not playerLabels[character].healthText then
+                    return
+                end
+
+                local hp = math.floor(humanoid.Health)
+                local maxHp = math.floor(humanoid.MaxHealth)
+                healthLabel.Text = hp .. " / " .. maxHp
+
+                if hp >= 75 then
+                    healthLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
+                elseif hp >= 41 then
+                    healthLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+                else
+                    healthLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+                end
+            end
+
+            updateHealth()
+            playerLabels[character].healthConn = humanoid.HealthChanged:Connect(updateHealth)
+        end
+
+        local function updateStamina()
+            if not playerLabels[character] or not playerLabels[character].staminaText then
+                return
+            end
+
+            local stamina = math.floor(character:GetAttribute("Stamina") or 0)
+            local maxStamina = math.floor(character:GetAttribute("MaxStamina") or 100)
+            staminaLabel.Text = stamina .. " / " .. maxStamina
+        end
+
+        updateStamina()
+        playerLabels[character].staminaConn = character:GetAttributeChangedSignal("Stamina"):Connect(updateStamina)
+    end
+
+    local function addEsp(targetTable, object, color)
+        if not object or targetTable[object] or object == LocalPlayer.Character then
+            return
+        end
+
+        local activeMethod = espMethod
+        if (activeMethod == "Drawing" or activeMethod == "Dual") and not supportsDrawing() then
+            activeMethod = "Highlight"
+        end
+
+        if activeMethod == "Dual" then
+            local drawing = createDrawingBox()
+            if drawing then
+                drawing.Color = color
+            end
+            targetTable[object] = {
+                highlight = newHighlight(object, color),
+                drawing = drawing
+            }
+        elseif activeMethod == "Highlight" then
+            targetTable[object] = newHighlight(object, color)
+        else
+            local drawing = createDrawingBox()
+            if drawing then
+                drawing.Color = color
+                targetTable[object] = drawing
+            end
+        end
+
+        if targetTable == esp.survivors then
+            createPlayerLabels(object, true)
+        elseif targetTable == esp.killers then
+            createPlayerLabels(object, false)
+        end
+    end
+
+    local function removeEsp(targetTable, object)
+        local value = targetTable[object]
+        if value then
+            if typeof(value) == "table" then
+                if value.highlight then
+                    value.highlight:Destroy()
+                end
+                if value.drawing then
+                    value.drawing:Remove()
+                end
+            elseif typeof(value) == "Instance" then
+                value:Destroy()
+            elseif type(value) == "userdata" and value.Remove then
+                value:Remove()
+            end
+
+            targetTable[object] = nil
+        end
+
+        if playerLabels[object] then
+            if playerLabels[object].healthConn then
+                playerLabels[object].healthConn:Disconnect()
+            end
+            if playerLabels[object].staminaConn then
+                playerLabels[object].staminaConn:Disconnect()
+            end
+            if playerLabels[object].gui then
+                playerLabels[object].gui:Destroy()
+            end
+            playerLabels[object] = nil
+        end
+    end
+
+    local function clearEsp(targetTable)
+        for object, value in pairs(targetTable) do
+            if value then
+                if typeof(value) == "table" then
+                    if value.highlight then
+                        value.highlight:Destroy()
+                    end
+                    if value.drawing then
+                        value.drawing:Remove()
+                    end
+                elseif typeof(value) == "Instance" then
+                    value:Destroy()
+                elseif type(value) == "userdata" and value.Remove then
+                    value:Remove()
+                end
+            end
+
+            targetTable[object] = nil
+
+            if playerLabels[object] then
+                if playerLabels[object].healthConn then
+                    playerLabels[object].healthConn:Disconnect()
+                end
+                if playerLabels[object].staminaConn then
+                    playerLabels[object].staminaConn:Disconnect()
+                end
+                if playerLabels[object].gui then
+                    playerLabels[object].gui:Destroy()
+                end
+                playerLabels[object] = nil
+            end
+        end
+    end
+
+    local function setSurvivorEspEnabled(state)
+        local playersFolder = getPlayersFolder()
+        local aliveFolder = playersFolder and playersFolder:FindFirstChild("ALIVE")
+        if not aliveFolder then
+            notify("Survivor ESP", "Wait for match to start.")
+            return
+        end
+
+        if esp.survivorAdd then
+            esp.survivorAdd:Disconnect()
+            esp.survivorAdd = nil
+        end
+        if esp.survivorRemove then
+            esp.survivorRemove:Disconnect()
+            esp.survivorRemove = nil
+        end
+
+        if not state then
+            clearEsp(esp.survivors)
+            notify("Survivor ESP", "Disabled.")
+            return
+        end
+
+        for _, value in ipairs(aliveFolder:GetChildren()) do
+            if value:IsA("Model") then
+                addEsp(esp.survivors, value, Color3.fromRGB(80, 180, 255))
+            end
+        end
+
+        esp.survivorAdd = aliveFolder.ChildAdded:Connect(function(value)
+            if value:IsA("Model") then
+                addEsp(esp.survivors, value, Color3.fromRGB(80, 180, 255))
+            end
+        end)
+
+        esp.survivorRemove = aliveFolder.ChildRemoved:Connect(function(value)
+            removeEsp(esp.survivors, value)
+        end)
+
+        notify("Survivor ESP", "Enabled.")
+    end
+
+    local function setKillerEspEnabled(state)
+        local playersFolder = getPlayersFolder()
+        local killerFolder = playersFolder and playersFolder:FindFirstChild("KILLER")
+        if not killerFolder then
+            notify("Killer ESP", "Wait for match to start.")
+            return
+        end
+
+        if esp.killerAdd then
+            esp.killerAdd:Disconnect()
+            esp.killerAdd = nil
+        end
+        if esp.killerRemove then
+            esp.killerRemove:Disconnect()
+            esp.killerRemove = nil
+        end
+
+        if not state then
+            clearEsp(esp.killers)
+            notify("Killer ESP", "Disabled.")
+            return
+        end
+
+        for _, value in ipairs(killerFolder:GetChildren()) do
+            if value:IsA("Model") then
+                addEsp(esp.killers, value, Color3.fromRGB(255, 80, 80))
+            end
+        end
+
+        esp.killerAdd = killerFolder.ChildAdded:Connect(function(value)
+            if value:IsA("Model") then
+                addEsp(esp.killers, value, Color3.fromRGB(255, 80, 80))
+            end
+        end)
+
+        esp.killerRemove = killerFolder.ChildRemoved:Connect(function(value)
+            removeEsp(esp.killers, value)
+        end)
+
+        notify("Killer ESP", "Enabled.")
+    end
+
+    local function setGeneratorEspEnabled(state)
+        if esp.genAdd then
+            esp.genAdd:Disconnect()
+            esp.genAdd = nil
+        end
+        if esp.genRemove then
+            esp.genRemove:Disconnect()
+            esp.genRemove = nil
+        end
+
+        if not state then
+            clearEsp(esp.generators)
+            notify("Generator ESP", "Disabled.")
+            return
+        end
+
+        for _, value in ipairs(Workspace:GetDescendants()) do
+            if value:IsA("Model") and value.Name == "Generator" then
+                addEsp(esp.generators, value, Color3.fromRGB(0, 255, 100))
+            end
+        end
+
+        esp.genAdd = Workspace.DescendantAdded:Connect(function(value)
+            if value:IsA("Model") and value.Name == "Generator" then
+                addEsp(esp.generators, value, Color3.fromRGB(0, 255, 100))
+            end
+        end)
+
+        esp.genRemove = Workspace.DescendantRemoving:Connect(function(value)
+            if esp.generators[value] then
+                removeEsp(esp.generators, value)
+            end
+        end)
+
+        notify("Generator ESP", "Enabled.")
+    end
+
+    local function clearHighlightTable(targetTable)
+        for _, highlight in pairs(targetTable) do
+            if highlight then
+                highlight:Destroy()
+            end
+        end
+        table.clear(targetTable)
+    end
+
+    local function setBatteryEspEnabled(state)
+        if batteryConn then
+            batteryConn:Disconnect()
+            batteryConn = nil
+        end
+
+        if not state then
+            clearHighlightTable(batteryHighlights)
+            notify("Battery ESP", "Disabled.")
+            return
+        end
+
+        local ignoreFolder = Workspace:FindFirstChild("IGNORE")
+        if ignoreFolder then
+            for _, value in ipairs(ignoreFolder:GetDescendants()) do
+                if value:IsA("MeshPart") and value.Name == "Battery" then
+                    local highlight = newHighlight(value, Color3.fromRGB(255, 0, 255))
+                    if highlight then
+                        batteryHighlights[value] = highlight
+                    end
+                end
+            end
+        end
+
+        batteryCo
