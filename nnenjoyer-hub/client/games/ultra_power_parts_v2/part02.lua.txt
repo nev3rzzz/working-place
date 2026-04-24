@@ -1,0 +1,523 @@
+ -1
+
+        local candidates = {}
+        if root:IsA("ScreenGui") then
+            table.insert(candidates, root)
+        end
+
+        for _, child in ipairs(root:GetChildren()) do
+            if child:IsA("ScreenGui") then
+                table.insert(candidates, child)
+            end
+        end
+
+        for _, screenGui in ipairs(candidates) do
+            if screenGui.Name ~= "NNEnjoyerBindCapture" then
+                local markerScore = countWindowMarkerTexts(screenGui)
+                if markerScore > 0 then
+                    local candidateFrame = findLargestWindowFrame(screenGui)
+                    local candidateArea = 0
+                    if candidateFrame then
+                        candidateArea = candidateFrame.AbsoluteSize.X * candidateFrame.AbsoluteSize.Y
+                    end
+
+                    if markerScore > bestScore or (markerScore == bestScore and candidateArea > bestArea) then
+                        bestScore = markerScore
+                        bestArea = candidateArea
+                        bestGui = screenGui
+                        bestFrame = candidateFrame
+                    end
+                end
+            end
+        end
+
+        return bestGui, bestFrame
+    end
+
+    local function findWindowDragHandle(windowFrame, titleObject)
+        local current = titleObject
+
+        while current and current ~= windowFrame do
+            if current:IsA("GuiObject") and current.AbsoluteSize.X >= math.floor(windowFrame.AbsoluteSize.X * 0.55) and
+                current.AbsoluteSize.Y <= 64 then
+                return current
+            end
+
+            current = current.Parent
+        end
+
+        if titleObject and titleObject.Parent and titleObject.Parent:IsA("GuiObject") then
+            return titleObject.Parent
+        end
+
+        return titleObject
+    end
+
+    local function lerpUDim2(fromValue, toValue, alpha)
+        return UDim2.new(
+            fromValue.X.Scale + ((toValue.X.Scale - fromValue.X.Scale) * alpha),
+            fromValue.X.Offset + ((toValue.X.Offset - fromValue.X.Offset) * alpha),
+            fromValue.Y.Scale + ((toValue.Y.Scale - fromValue.Y.Scale) * alpha),
+            fromValue.Y.Offset + ((toValue.Y.Offset - fromValue.Y.Offset) * alpha)
+        )
+    end
+
+    local function captureWindowReferences()
+        local root = getGuiRoot()
+        if not root then
+            return false
+        end
+
+        local titleObject = findWindowTitleObject(root)
+        local windowFrame = nil
+        local windowGui = nil
+
+        if titleObject then
+            windowFrame = findWindowFrameFromObject(titleObject)
+            if windowFrame then
+                windowGui = findWindowScreenGui(windowFrame)
+            end
+        end
+
+        if not windowGui or not windowFrame then
+            windowGui, windowFrame = findWindowFallbackCandidate(root)
+        end
+
+        if not windowGui then
+            return false
+        end
+
+        local scale = nil
+        if windowFrame then
+            scale = windowFrame:FindFirstChild("NNEnjoyerSmoothScale")
+            if not scale then
+                scale = Instance.new("UIScale")
+                scale.Name = "NNEnjoyerSmoothScale"
+                scale.Parent = windowFrame
+            end
+        end
+
+        trackedWindowGui = windowGui
+        trackedWindowFrame = windowFrame
+        trackedWindowScale = scale
+        trackedWindowVisible = windowGui.Enabled ~= false
+        trackedWindowAnimating = false
+        trackedWindowShownPosition = windowFrame.Position
+
+        return true, titleObject, windowFrame
+    end
+
+    local function tweenWindowVisibility(show)
+        if not trackedWindowGui then
+            return false
+        end
+
+        if not trackedWindowFrame or not trackedWindowScale then
+            trackedWindowGui.Enabled = show
+            trackedWindowVisible = show
+            return true
+        end
+
+        if trackedWindowShownPosition == nil then
+            trackedWindowShownPosition = trackedWindowFrame.Position
+        end
+
+        trackedWindowAnimating = true
+        trackedWindowAnimationStartedAt = os.clock()
+
+        if show then
+            trackedWindowGui.Enabled = true
+            trackedWindowFrame.Visible = true
+            trackedWindowVisible = true
+            trackedWindowScale.Scale = 0.92
+            trackedWindowFrame.Position = trackedWindowShownPosition + UDim2.fromOffset(0, 24)
+
+            local scaleTween = TweenService:Create(trackedWindowScale, TweenInfo.new(0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Scale = 1
+            })
+
+            local positionTween = TweenService:Create(trackedWindowFrame, TweenInfo.new(0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Position = trackedWindowShownPosition
+            })
+
+            local finished = false
+            positionTween.Completed:Connect(function()
+                finished = true
+                trackedWindowAnimating = false
+                trackedWindowAnimationStartedAt = 0
+            end)
+
+            task.delay(0.45, function()
+                if not finished then
+                    trackedWindowAnimating = false
+                    trackedWindowAnimationStartedAt = 0
+                end
+            end)
+
+            scaleTween:Play()
+            positionTween:Play()
+            return true
+        end
+
+        trackedWindowShownPosition = trackedWindowFrame.Position
+
+        local scaleTween = TweenService:Create(trackedWindowScale, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
+            Scale = 0.93
+        })
+
+        local positionTween = TweenService:Create(trackedWindowFrame, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
+            Position = trackedWindowShownPosition + UDim2.fromOffset(0, 24)
+        })
+
+        local finished = false
+        positionTween.Completed:Connect(function()
+            finished = true
+            trackedWindowVisible = false
+            trackedWindowGui.Enabled = false
+            trackedWindowFrame.Visible = true
+            trackedWindowFrame.Position = trackedWindowShownPosition
+            trackedWindowScale.Scale = 1
+            trackedWindowAnimating = false
+            trackedWindowAnimationStartedAt = 0
+        end)
+
+        task.delay(0.4, function()
+            if not finished then
+                trackedWindowVisible = false
+                trackedWindowGui.Enabled = false
+                trackedWindowFrame.Visible = true
+                trackedWindowFrame.Position = trackedWindowShownPosition
+                trackedWindowScale.Scale = 1
+                trackedWindowAnimating = false
+                trackedWindowAnimationStartedAt = 0
+            end
+        end)
+
+        scaleTween:Play()
+        positionTween:Play()
+        return true
+    end
+
+    local function toggleWindowVisibility()
+        if not trackedWindowFrame or not trackedWindowGui or not trackedWindowFrame.Parent or not trackedWindowGui.Parent then
+            local foundWindow = captureWindowReferences()
+            if not foundWindow then
+                local fallbackGui = nil
+                local fallbackFrame = nil
+                fallbackGui, fallbackFrame = findWindowFallbackCandidate(getGuiRoot())
+                if not fallbackGui then
+                    return false
+                end
+
+                trackedWindowGui = fallbackGui
+                trackedWindowFrame = fallbackFrame
+                trackedWindowScale = nil
+                trackedWindowShownPosition = fallbackFrame and fallbackFrame.Position or nil
+            end
+        end
+
+        if trackedWindowAnimating then
+            if trackedWindowAnimationStartedAt > 0 and os.clock() - trackedWindowAnimationStartedAt > 0.9 then
+                trackedWindowAnimating = false
+                trackedWindowAnimationStartedAt = 0
+            else
+                return false
+            end
+        end
+
+        local shouldShow = trackedWindowGui.Enabled == false
+        trackedWindowVisible = trackedWindowGui.Enabled ~= false
+        return tweenWindowVisibility(shouldShow)
+    end
+
+    local function setupSmoothWindow()
+        task.spawn(function()
+            local titleObject = nil
+
+            for _ = 1, 40 do
+                titleObject = findWindowTitleObject(getGuiRoot())
+                if titleObject then
+                    break
+                end
+
+                task.wait(0.1)
+            end
+
+            if not titleObject then
+                local foundWindow = captureWindowReferences()
+                if not foundWindow or not trackedWindowFrame then
+                    return
+                end
+
+                tweenWindowVisibility(true)
+                return
+            end
+
+            local foundWindow, _, windowFrame = captureWindowReferences()
+            if not foundWindow or not windowFrame then
+                return
+            end
+
+            local dragHandle = findWindowDragHandle(windowFrame, titleObject) or windowFrame
+            tweenWindowVisibility(true)
+
+            if smoothWindowConnection then
+                smoothWindowConnection:Disconnect()
+                smoothWindowConnection = nil
+            end
+
+            if smoothWindowInputConnection then
+                smoothWindowInputConnection:Disconnect()
+                smoothWindowInputConnection = nil
+            end
+
+            if smoothWindowInputEndConnection then
+                smoothWindowInputEndConnection:Disconnect()
+                smoothWindowInputEndConnection = nil
+            end
+
+            local dragging = false
+            local activeDragInput = nil
+            local dragStartInputPosition = nil
+            local dragStartWindowPosition = nil
+            local targetWindowPosition = windowFrame.Position
+
+              smoothWindowConnection = RunService.RenderStepped:Connect(function(deltaTime)
+                  if dragging then
+                      local alpha = 1 - math.exp(-deltaTime * 18)
+                      windowFrame.Position = lerpUDim2(windowFrame.Position, targetWindowPosition, alpha)
+                      trackedWindowShownPosition = windowFrame.Position
+                  end
+              end)
+
+            dragHandle.InputBegan:Connect(function(input)
+                if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+                    return
+                end
+
+                local relativeY = input.Position.Y - windowFrame.AbsolutePosition.Y
+                if relativeY > 48 then
+                    return
+                end
+
+                dragging = true
+                activeDragInput = input
+                dragStartInputPosition = input.Position
+                dragStartWindowPosition = windowFrame.Position
+                targetWindowPosition = windowFrame.Position
+            end)
+
+            smoothWindowInputConnection = UserInputService.InputChanged:Connect(function(input)
+                if not dragging or input ~= activeDragInput or not dragStartInputPosition or not dragStartWindowPosition then
+                    return
+                end
+
+                local delta = input.Position - dragStartInputPosition
+                targetWindowPosition = UDim2.new(
+                    dragStartWindowPosition.X.Scale,
+                    dragStartWindowPosition.X.Offset + delta.X,
+                    dragStartWindowPosition.Y.Scale,
+                    dragStartWindowPosition.Y.Offset + delta.Y
+                )
+            end)
+
+            smoothWindowInputEndConnection = UserInputService.InputEnded:Connect(function(input)
+                if input == activeDragInput then
+                    dragging = false
+                    activeDragInput = nil
+                    dragStartInputPosition = nil
+                    dragStartWindowPosition = nil
+                    trackedWindowShownPosition = windowFrame.Position
+                end
+            end)
+        end)
+    end
+
+    local function refreshCharacterCache(character)
+        currentCharacter = character or LocalPlayer.Character
+        currentHumanoid = currentCharacter and currentCharacter:FindFirstChildOfClass("Humanoid")
+        currentRootPart = currentCharacter and currentCharacter:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function refreshBackpackCache()
+        currentBackpack = LocalPlayer:FindFirstChildOfClass("Backpack") or LocalPlayer:FindFirstChild("Backpack")
+    end
+
+    local function getCharacter()
+        if currentCharacter and currentCharacter.Parent then
+            return currentCharacter
+        end
+
+        refreshCharacterCache(LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait())
+        return currentCharacter
+    end
+
+    local function getHumanoid()
+        local character = getCharacter()
+        if not currentHumanoid or currentHumanoid.Parent ~= character then
+            currentHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+        end
+
+        return currentHumanoid
+    end
+
+    local function getRootPart()
+        local character = getCharacter()
+        if not currentRootPart or currentRootPart.Parent ~= character then
+            currentRootPart = character and character:FindFirstChild("HumanoidRootPart")
+        end
+
+        return currentRootPart
+    end
+
+    local function getBackpack()
+        if currentBackpack and currentBackpack.Parent == LocalPlayer then
+            return currentBackpack
+        end
+
+        currentBackpack = LocalPlayer:FindFirstChildOfClass("Backpack") or LocalPlayer:WaitForChild("Backpack", 5)
+        return currentBackpack
+    end
+
+    local function resetAimCursorCache()
+        lastMouseTargetX = nil
+        lastMouseTargetY = nil
+    end
+
+    local function invalidateTargetCharacterCache()
+        cachedTargetCharacter = nil
+        cachedTargetHumanoid = nil
+        cachedTargetHead = nil
+        cachedTargetRootPart = nil
+        cachedTargetUpperTorso = nil
+        cachedTargetTorso = nil
+        cachedTargetLowerTorso = nil
+    end
+
+    local function invalidateTargetCache()
+        cachedTargetPlayer = nil
+        invalidateTargetCharacterCache()
+    end
+
+    local function refreshTargetCharacterCache(character)
+        cachedTargetCharacter = character
+        cachedTargetHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+        cachedTargetHead = character and character:FindFirstChild("Head")
+        cachedTargetRootPart = character and character:FindFirstChild("HumanoidRootPart")
+        cachedTargetUpperTorso = character and character:FindFirstChild("UpperTorso")
+        cachedTargetTorso = character and character:FindFirstChild("Torso")
+        cachedTargetLowerTorso = character and character:FindFirstChild("LowerTorso")
+    end
+
+    refreshCharacterCache(LocalPlayer.Character)
+    refreshBackpackCache()
+
+    characterAddedConn = LocalPlayer.CharacterAdded:Connect(function(character)
+        refreshCharacterCache(character)
+    end)
+
+    characterRemovingConn = LocalPlayer.CharacterRemoving:Connect(function(character)
+        if currentCharacter == character then
+            currentCharacter = nil
+            currentHumanoid = nil
+            currentRootPart = nil
+        end
+    end)
+
+    childAddedConn = LocalPlayer.ChildAdded:Connect(function(child)
+        if child:IsA("Backpack") then
+            currentBackpack = child
+        end
+    end)
+
+    childRemovingConn = LocalPlayer.ChildRemoved:Connect(function(child)
+        if child == currentBackpack then
+            currentBackpack = nil
+        end
+    end)
+
+    local function setJumpPower(value)
+        local humanoid = getHumanoid()
+        if not humanoid then
+            notify("JumpPower", "Humanoid was not found.")
+            return
+        end
+
+        humanoid.UseJumpPower = true
+        humanoid.JumpPower = value
+    end
+
+    local function checkJumpPower()
+        local humanoid = getHumanoid()
+        if not humanoid then
+            notify("JumpPower", "Humanoid was not found.")
+            return
+        end
+
+        notify(
+            "JumpPower",
+            "Current: " .. tostring(humanoid.JumpPower) .. " | UseJumpPower: " .. tostring(humanoid.UseJumpPower)
+        )
+    end
+
+    local function setWalkSpeed(value)
+        local humanoid = getHumanoid()
+        if not humanoid then
+            notify("WalkSpeed", "Humanoid was not found.")
+            return
+        end
+
+        humanoid.WalkSpeed = value
+    end
+
+    local function checkWalkSpeed()
+        local humanoid = getHumanoid()
+        if not humanoid then
+            notify("WalkSpeed", "Humanoid was not found.")
+            return
+        end
+
+        notify("WalkSpeed", "Current: " .. tostring(humanoid.WalkSpeed))
+    end
+
+    local function resetCharacterFromLongFall()
+        local humanoid = getHumanoid()
+        if not humanoid or humanoid.Health <= 0 then
+            return
+        end
+
+        pcall(function()
+            humanoid.Health = 0
+        end)
+    end
+
+    local function setAutoResetLongFallEnabled(enabled)
+        autoResetLongFallEnabled = enabled == true
+        longFallStartTime = nil
+        longFallCheckAccumulator = 0
+
+        if autoResetLongFallConnection then
+            autoResetLongFallConnection:Disconnect()
+            autoResetLongFallConnection = nil
+        end
+
+        if not autoResetLongFallEnabled then
+            return
+        end
+
+        autoResetLongFallConnection = RunService.Heartbeat:Connect(function(deltaTime)
+            longFallCheckAccumulator += deltaTime
+            if longFallCheckAccumulator < LONG_FALL_CHECK_INTERVAL then
+                return
+            end
+
+            longFallCheckAccumulator = 0
+
+            local humanoid = getHumanoid()
+            local rootPart = getRootPart()
+            if not humanoid or not rootPart or humanoid.Health <= 0 then
+                longFallStartTime = nil
+                return
+            end
+
+            loc
