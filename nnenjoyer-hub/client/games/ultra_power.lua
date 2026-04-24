@@ -46,7 +46,8 @@ return function(context)
         TabWidth = 160,
         Size = UDim2.fromOffset(620, 540),
         Acrylic = false,
-        Theme = "Dark"
+        Theme = "Dark",
+        MinimizeKey = Enum.KeyCode.RightAlt
     })
 
     local tabs = {
@@ -71,19 +72,6 @@ return function(context)
             Icon = "settings"
         })
     }
-]])
-
-    source = mustReplace(source, [[
-    local smoothWindowConnection = nil
-    local smoothWindowInputConnection = nil
-    local smoothWindowInputEndConnection = nil
-    local customBindConnection = nil
-]], [[
-    local smoothWindowConnection = nil
-    local smoothWindowInputConnection = nil
-    local smoothWindowInputEndConnection = nil
-    local customBindConnection = nil
-    local lastMinimizeToggleTime = 0
 ]])
 
     source = mustReplace(source, [[
@@ -273,36 +261,6 @@ return function(context)
         Title = "Interface",
         Content = "Minimize Bind: RightAlt"
     })
-]])
-
-    source = mustReplace(source, [[
-        if gameProcessed then
-            return
-        end
-
-        if doesBindMatch(equipFirstToolsBind, input) then
-]], [[
-        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.RightAlt then
-            local now = os.clock()
-            if now - lastMinimizeToggleTime < 0.15 then
-                return
-            end
-
-            lastMinimizeToggleTime = now
-            task.spawn(function()
-                local toggled = toggleWindowVisibility()
-                if not toggled then
-                    notify("Minimize Bind", "The interface is busy right now. Try again in a moment.")
-                end
-            end)
-            return
-        end
-
-        if gameProcessed then
-            return
-        end
-
-        if doesBindMatch(equipFirstToolsBind, input) then
 ]])
 
     local chunk = assert(loadstring(source, "@ultra_power_restructured"))
