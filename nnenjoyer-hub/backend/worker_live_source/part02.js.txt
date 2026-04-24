@@ -1,0 +1,544 @@
+        last_seen_at,
+        ended_at,
+        updated_at
+      )
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', ?11, ?12, NULL, ?12)
+     ON CONFLICT(session_id) DO UPDATE
+     SET license_key = excluded.license_key,
+         user_id = excluded.user_id,
+         device_id = excluded.device_id,
+         place_id = excluded.place_id,
+         game_id = excluded.game_id,
+         game_name = excluded.game_name,
+         job_id = excluded.job_id,
+         executor = excluded.executor,
+         platform = excluded.platform,
+         status = 'active',
+         last_seen_at = excluded.last_seen_at,
+         ended_at = NULL,
+         updated_at = excluded.updated_at`
+  )
+    .bind(
+      sessionId,
+      normalizeText(data.key),
+      normalizeText(data.userId),
+      normalizeText(data.deviceId),
+      normalizeOptionalText(data.placeId),
+      normalizeOptionalText(data.gameId),
+      normalizeOptionalText(data.gameName),
+      normalizeOptionalText(data.jobId),
+      normalizeOptionalText(data.executor),
+      normalizeOptionalText(data.platform),
+      startedAt,
+      now
+    )
+    .run();
+
+  return findSession(db, sessionId);
+}
+
+async function stopSession(db, sessionId, status = "ended") {
+  const now = nowIso();
+  await db.prepare(
+    `UPDATE live_sessions
+     SET status = ?2,
+         ended_at = ?3,
+         updated_at = ?3
+     WHERE session_id = ?1`
+  )
+    .bind(sessionId, status, now)
+    .run();
+}
+
+async function queueCommandForSessions(db, filters, commandType, payload = {}) {
+  const sessions = await queryAll(
+    db.prepare("SELECT * FROM live_sessions WHERE status = 'active' ORDER BY last_seen_at DESC")
+  );
+
+  const matched = sessions.filter((row) => {
+    if (filters.sessionId && row.session_id !== filters.sessionId) {
+      return false;
+    }
+
+    if (filters.key && row.license_key !== filters.key) {
+      return false;
+    }
+
+    if (filters.userId && row.user_id !== filters.userId) {
+      return false;
+    }
+
+    if (filters.onlyOnline === true && !isSessionOnline(row)) {
+      return false;
+    }
+
+    return true;
+  });
+
+  if (matched.length === 0) {
+    return { count: 0, nonce: null };
+  }
+
+  const nonce = `${commandType}:${generateRandomId(12)}`;
+  const updatedAt = nowIso();
+  const payloadText = serializeJson(payload);
+
+  for (const row of matched) {
+    await db.prepare(
+      `UPDATE live_sessions
+       SET pending_command = ?2,
+           command_nonce = ?3,
+           command_payload = ?4,
+           command_updated_at = ?5,
+           updated_at = ?5
+       WHERE session_id = ?1`
+    )
+      .bind(row.session_id, commandType, nonce, payloadText, updatedAt)
+      .run();
+  }
+
+  return {
+    count: matched.length,
+    nonce,
+  };
+}
+
+function buildAdminLicenseRecord(row, activeSessionCount = 0) {
+  return {
+    key: row.license_key,
+    tier: row.tier,
+    status: row.status,
+    note: normalizeOptionalText(row.note),
+    boundUserId: normalizeOptionalText(row.bound_user_id),
+    boundDeviceId: normalizeOptionalText(row.bound_device_id),
+    startsAt: normalizeOptionalText(row.starts_at),
+    expiresAt: normalizeOptionalText(row.expires_at),
+    redeemedAt: normalizeOptionalText(row.redeemed_at),
+    lastValidatedAt: normalizeOptionalText(row.last_validated_at),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    durationSeconds: row.duration_seconds ?? null,
+    remainingSeconds: getRemainingSeconds(row),
+    allowedPlaceIds: parseStoredIdList(row.allowed_place_ids),
+    allowedGameIds: parseStoredIdList(row.allowed_game_ids),
+    onlineSessionCount: activeSessionCount,
+    isOnline: activeSessionCount > 0,
+  };
+}
+
+function buildAdminUserRecords(licenses, sessions) {
+  const users = new Map();
+
+  const ensureUser = (userId) => {
+    const normalizedUserId = normalizeText(userId);
+    if (!normalizedUserId) {
+      return null;
+    }
+
+    if (!users.has(normalizedUserId)) {
+      users.set(normalizedUserId, {
+        userId: normalizedUserId,
+        keyCount: 0,
+        activeKeyCount: 0,
+        onlineSessionCount: 0,
+        lastValidatedAt: null,
+        lastSeenAt: null,
+        tiers: new Set(),
+        keys: [],
+      });
+    }
+
+    return users.get(normalizedUserId);
+  };
+
+  for (const row of licenses) {
+    const entry = ensureUser(row.bound_user_id);
+    if (!entry) {
+      continue;
+    }
+
+    entry.keyCount += 1;
+    if (row.status === "active") {
+      entry.activeKeyCount += 1;
+    }
+
+    entry.tiers.add(row.tier);
+    entry.keys.push(row.license_key);
+
+    const validatedMs = safeDateMs(row.last_validated_at);
+    const currentMs = safeDateMs(entry.lastValidatedAt);
+    if (validatedMs !== null && (currentMs === null || validatedMs > currentMs)) {
+      entry.lastValidatedAt = row.last_validated_at;
+    }
+  }
+
+  for (const session of sessions) {
+    const entry = ensureUser(session.user_id);
+    if (!entry) {
+      continue;
+    }
+
+    if (isSessionOnline(session)) {
+      entry.onlineSessionCount += 1;
+    }
+
+    const lastSeenMs = safeDateMs(session.last_seen_at);
+    const currentMs = safeDateMs(entry.lastSeenAt);
+    if (lastSeenMs !== null && (currentMs === null || lastSeenMs > currentMs)) {
+      entry.lastSeenAt = session.last_seen_at;
+    }
+  }
+
+  return Array.from(users.values())
+    .map((entry) => ({
+      userId: entry.userId,
+      keyCount: entry.keyCount,
+      activeKeyCount: entry.activeKeyCount,
+      onlineSessionCount: entry.onlineSessionCount,
+      lastValidatedAt: entry.lastValidatedAt,
+      lastSeenAt: entry.lastSeenAt,
+      tiers: Array.from(entry.tiers),
+      keys: entry.keys,
+    }))
+    .sort((a, b) => {
+      const left = safeDateMs(a.lastSeenAt) ?? safeDateMs(a.lastValidatedAt) ?? 0;
+      const right = safeDateMs(b.lastSeenAt) ?? safeDateMs(b.lastValidatedAt) ?? 0;
+      return right - left;
+    });
+}
+
+async function issueKey(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const key = normalizeText(body.key) || generateLicenseKey();
+  const tier = normalizeText(body.tier) || "basic";
+  const startsAt = toIso(body.startsAt);
+  const expiresAt = toIso(body.expiresAt);
+  const durationSeconds = toPositiveInteger(body.durationSeconds);
+  const note = normalizeText(body.note);
+  const boundUserId = normalizeOptionalText(body.boundUserId ?? body.userId);
+  const boundDeviceId = normalizeOptionalText(body.boundDeviceId ?? body.deviceId);
+  const scriptUrl = body.scriptUrl === null || body.scriptUrl === undefined || body.scriptUrl === ""
+    ? null
+    : normalizeUrl(body.scriptUrl);
+  const requestedPlaceIds = normalizeIdList(
+    body.allowedPlaceIds ?? body.placeIds ?? body.placeId
+  );
+  const allowedPlaceIds = requestedPlaceIds || DEFAULT_SUPPORTED_PLACE_IDS.slice();
+  const allowedGameIds = normalizeIdList(
+    body.allowedGameIds ?? body.gameIds ?? body.gameId
+  );
+
+  const windowError = validateWindow(startsAt, expiresAt);
+  if (windowError) {
+    return json({ ok: false, error: windowError }, 400);
+  }
+
+  if (body.durationSeconds !== undefined && durationSeconds === null) {
+    return json({ ok: false, error: "durationSeconds must be a positive integer." }, 400);
+  }
+
+  if (body.scriptUrl !== undefined && body.scriptUrl !== null && body.scriptUrl !== "" && !scriptUrl) {
+    return json({ ok: false, error: "scriptUrl must be a valid absolute URL." }, 400);
+  }
+
+  if ((boundUserId && !boundDeviceId) || (!boundUserId && boundDeviceId)) {
+    return json({ ok: false, error: "boundUserId and boundDeviceId must be provided together." }, 400);
+  }
+
+  const existing = await findLicense(env.DB, key);
+  if (existing) {
+    return json({ ok: false, error: "Key already exists." }, 409);
+  }
+
+  const createdAt = nowIso();
+
+  await env.DB.prepare(
+    `INSERT INTO license_keys
+      (
+        license_key,
+        tier,
+        status,
+        starts_at,
+        expires_at,
+        duration_seconds,
+        note,
+        script_url,
+        allowed_place_ids,
+        allowed_game_ids,
+        bound_user_id,
+        bound_device_id,
+        created_at,
+        updated_at
+      )
+     VALUES (?1, ?2, 'active', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)`
+  )
+    .bind(
+      key,
+      tier,
+      startsAt,
+      expiresAt,
+      durationSeconds,
+      note || null,
+      scriptUrl,
+      serializeIdList(allowedPlaceIds),
+      serializeIdList(allowedGameIds),
+      boundUserId,
+      boundDeviceId,
+      createdAt
+    )
+    .run();
+
+  return json({
+    ok: true,
+    key,
+    tier,
+    startsAt,
+    expiresAt,
+    status: "active",
+    durationSeconds,
+    scriptUrl,
+    allowedPlaceIds,
+    allowedGameIds: allowedGameIds || [],
+    boundUserId,
+    boundDeviceId,
+  });
+}
+
+async function redeemKey(request, env) {
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const access = await authorizeLicenseAccess(env, body, {
+    allowBind: true,
+  });
+
+  if (!access.ok) {
+    if (access.code === "maintenance_mode") {
+      return maintenanceErrorResponse(access.maintenanceState);
+    }
+
+    return json({ ok: false, error: access.error }, access.status);
+  }
+
+  const row = access.row;
+  const key = normalizeText(body.key);
+  const now = nowIso();
+  const finalUserId = access.finalUserId;
+  const finalDeviceId = access.finalDeviceId;
+  let redeemedAt = normalizeOptionalText(row.redeemed_at);
+  let expiresAt = normalizeOptionalText(row.expires_at);
+
+  if (!redeemedAt) {
+    redeemedAt = now;
+  }
+
+  if (!expiresAt && row.duration_seconds) {
+    expiresAt = new Date(Date.now() + (row.duration_seconds * 1000)).toISOString();
+  }
+
+  await env.DB.prepare(
+    `UPDATE license_keys
+     SET bound_user_id = ?2,
+         bound_device_id = ?3,
+         redeemed_at = ?4,
+         expires_at = ?5,
+         last_validated_at = ?6,
+         updated_at = ?6
+      WHERE license_key = ?1`
+  )
+    .bind(
+      key,
+      finalUserId,
+      finalDeviceId,
+      redeemedAt,
+      expiresAt,
+      now
+    )
+    .run();
+
+  return json(buildLicensePayload({
+    ...row,
+    bound_user_id: finalUserId,
+    bound_device_id: finalDeviceId,
+    redeemed_at: redeemedAt,
+    expires_at: expiresAt,
+    last_validated_at: now,
+    updated_at: now,
+  }));
+}
+
+async function validateKey(request, env) {
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const access = await authorizeLicenseAccess(env, body, {
+    allowBind: false,
+  });
+
+  if (!access.ok) {
+    if (access.code === "maintenance_mode") {
+      return maintenanceErrorResponse(access.maintenanceState);
+    }
+
+    return json({ ok: false, error: access.error }, access.status);
+  }
+
+  const key = normalizeText(body.key);
+  const now = nowIso();
+
+  await env.DB.prepare(
+    `UPDATE license_keys
+     SET last_validated_at = ?2,
+         updated_at = ?2
+     WHERE license_key = ?1`
+  )
+    .bind(key, now)
+    .run();
+
+  return json(buildLicensePayload({
+    ...access.row,
+    last_validated_at: now,
+    updated_at: now,
+  }));
+}
+
+async function startSession(request, env) {
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const access = await authorizeLicenseAccess(env, body, {
+    allowBind: false,
+  });
+
+  if (!access.ok) {
+    if (access.code === "maintenance_mode") {
+      return maintenanceErrorResponse(access.maintenanceState);
+    }
+
+    return json({ ok: false, error: access.error, code: access.code }, access.status);
+  }
+
+  const session = await upsertSession(env.DB, {
+    sessionId: body.sessionId,
+    key: normalizeText(body.key),
+    userId: normalizeText(body.userId),
+    deviceId: normalizeText(body.deviceId),
+    placeId: normalizeOptionalText(body.placeId),
+    gameId: normalizeOptionalText(body.gameId),
+    gameName: normalizeOptionalText(body.gameName),
+    jobId: normalizeOptionalText(body.jobId),
+    executor: normalizeOptionalText(body.executor),
+    platform: normalizeOptionalText(body.platform),
+  });
+
+  return json({
+    ok: true,
+    sessionId: session.session_id,
+    heartbeatIntervalSeconds: HEARTBEAT_INTERVAL_SECONDS,
+    command: buildPendingSessionCommand(session),
+  });
+}
+
+async function heartbeatSession(request, env) {
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const sessionId = normalizeText(body.sessionId);
+  if (!sessionId) {
+    return json({ ok: false, error: "sessionId is required." }, 400);
+  }
+
+  const existingSession = await findSession(env.DB, sessionId);
+  if (!existingSession) {
+    return json({ ok: false, error: "Session not found.", code: "session_not_found" }, 404);
+  }
+
+  const maintenanceState = await getMaintenanceState(env.DB);
+  const access = await authorizeLicenseAccess(env, body, {
+    allowBind: false,
+    skipMaintenance: true,
+  });
+
+  const session = await upsertSession(env.DB, {
+    sessionId,
+    key: normalizeText(body.key),
+    userId: normalizeText(body.userId),
+    deviceId: normalizeText(body.deviceId),
+    placeId: normalizeOptionalText(body.placeId),
+    gameId: normalizeOptionalText(body.gameId),
+    gameName: normalizeOptionalText(body.gameName),
+    jobId: normalizeOptionalText(body.jobId),
+    executor: normalizeOptionalText(body.executor),
+    platform: normalizeOptionalText(body.platform),
+    startedAt: existingSession.started_at,
+  });
+
+  let command = buildPendingSessionCommand(session);
+  if (!command) {
+    command = buildAccessFailureCommand(access, access.row || null, maintenanceState);
+  }
+
+  if (!access.ok && command && command.type === "terminate") {
+    await env.DB.prepare(
+      `UPDATE live_sessions
+       SET status = 'blocked',
+           updated_at = ?2
+       WHERE session_id = ?1`
+    )
+      .bind(sessionId, nowIso())
+      .run();
+  }
+
+  return json({
+    ok: true,
+    sessionId,
+    heartbeatIntervalSeconds: HEARTBEAT_INTERVAL_SECONDS,
+    command,
+    session: buildSessionPayload(session, command),
+  });
+}
+
+async function stopSessionRoute(request, env) {
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const sessionId = normalizeText(body.sessionId);
+  if (!sessionId) {
+    return json({ ok: false, error: "sessionId is required." }, 400);
+  }
+
+  const row = await findSession(env.DB, sessionId);
+  if (!row) {
+    return json({ ok: false, error: "Session not found." }, 404);
+  }
+
+  await stopSession(env.DB, sessionId, normalizeText(body.status) || "ended");
+  return json({ ok: true, sessionId, status: normalizeText(body.status) || "ended" });
+}
+
+async function revokeKey(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400)
