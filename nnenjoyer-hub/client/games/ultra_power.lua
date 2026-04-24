@@ -116,14 +116,12 @@ return function(context)
             task.delay(0.35, function()
                 if not finished then
                     trackedWindowAnimating = false
-                    trackedWindowAnimationStartedAt = 0
                 end
             end)
 ]], [[
             task.delay(0.45, function()
                 if not finished then
                     trackedWindowAnimating = false
-                    trackedWindowAnimationStartedAt = 0
                 end
             end)
 ]])
@@ -155,7 +153,6 @@ return function(context)
                 trackedWindowFrame.Position = trackedWindowShownPosition
                 trackedWindowScale.Scale = 1
                 trackedWindowAnimating = false
-                trackedWindowAnimationStartedAt = 0
             end
         end)
 ]], [[
@@ -167,25 +164,8 @@ return function(context)
                 trackedWindowFrame.Position = trackedWindowShownPosition
                 trackedWindowScale.Scale = 1
                 trackedWindowAnimating = false
-                trackedWindowAnimationStartedAt = 0
             end
         end)
-]])
-
-    source = mustReplace(source, [[
-            if trackedWindowAnimationStartedAt > 0 and os.clock() - trackedWindowAnimationStartedAt > 0.8 then
-                trackedWindowAnimating = false
-                trackedWindowAnimationStartedAt = 0
-            else
-                return false
-            end
-]], [[
-            if trackedWindowAnimationStartedAt > 0 and os.clock() - trackedWindowAnimationStartedAt > 0.9 then
-                trackedWindowAnimating = false
-                trackedWindowAnimationStartedAt = 0
-            else
-                return false
-            end
 ]])
 
     source = mustReplace(source, [[
