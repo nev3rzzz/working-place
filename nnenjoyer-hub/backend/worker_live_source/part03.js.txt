@@ -1,0 +1,603 @@
+;
+  }
+
+  const key = normalizeText(body.key);
+  if (!key) {
+    return json({ ok: false, error: "key is required." }, 400);
+  }
+
+  const row = await findLicense(env.DB, key);
+  if (!row) {
+    return json({ ok: false, error: "Key not found." }, 404);
+  }
+
+  const now = nowIso();
+
+  await env.DB.prepare(
+    `UPDATE license_keys
+     SET status = 'revoked',
+         updated_at = ?2
+     WHERE license_key = ?1`
+  )
+    .bind(key, now)
+    .run();
+
+  const queued = await queueCommandForSessions(env.DB, {
+    key,
+    onlyOnline: true,
+  }, "terminate", {
+    message: "Access revoked by admin.",
+  });
+
+  return json({
+    ok: true,
+    key,
+    status: "revoked",
+    terminatedSessions: queued.count,
+  });
+}
+
+async function extendKey(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const key = normalizeText(body.key);
+  const extendSeconds = toPositiveInteger(body.extendSeconds ?? body.seconds);
+
+  if (!key || !extendSeconds) {
+    return json({ ok: false, error: "key and extendSeconds are required." }, 400);
+  }
+
+  const row = await findLicense(env.DB, key);
+  if (!row) {
+    return json({ ok: false, error: "Key not found." }, 404);
+  }
+
+  let expiresAt = normalizeOptionalText(row.expires_at);
+  let durationSeconds = row.duration_seconds ?? null;
+
+  if (expiresAt) {
+    const baseMs = Math.max(safeDateMs(expiresAt) ?? 0, Date.now());
+    expiresAt = new Date(baseMs + (extendSeconds * 1000)).toISOString();
+  } else if (durationSeconds) {
+    durationSeconds += extendSeconds;
+  } else {
+    expiresAt = new Date(Date.now() + (extendSeconds * 1000)).toISOString();
+  }
+
+  const updatedAt = nowIso();
+
+  await env.DB.prepare(
+    `UPDATE license_keys
+     SET expires_at = ?2,
+         duration_seconds = ?3,
+         updated_at = ?4
+     WHERE license_key = ?1`
+  )
+    .bind(key, expiresAt, durationSeconds, updatedAt)
+    .run();
+
+  return json({
+    ok: true,
+    key,
+    expiresAt,
+    durationSeconds,
+    remainingSeconds: expiresAt
+      ? Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000))
+      : null,
+  });
+}
+
+async function resetBind(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const key = normalizeText(body.key);
+  if (!key) {
+    return json({ ok: false, error: "key is required." }, 400);
+  }
+
+  const row = await findLicense(env.DB, key);
+  if (!row) {
+    return json({ ok: false, error: "Key not found." }, 404);
+  }
+
+  const resetUser = body.resetUser === true;
+  const resetDevice = body.resetDevice === true;
+  const clearRedeemed = body.clearRedeemed === true;
+  const clearExpires = body.clearExpires === true || (clearRedeemed && row.duration_seconds);
+
+  if (!resetUser && !resetDevice && !clearRedeemed && !clearExpires) {
+    return json({
+      ok: false,
+      error: "Provide at least one action: resetUser, resetDevice, clearRedeemed or clearExpires.",
+    }, 400);
+  }
+
+  const updatedRow = {
+    ...row,
+    bound_user_id: resetUser ? null : row.bound_user_id,
+    bound_device_id: resetDevice ? null : row.bound_device_id,
+    redeemed_at: clearRedeemed ? null : row.redeemed_at,
+    expires_at: clearExpires ? null : row.expires_at,
+    updated_at: nowIso(),
+  };
+
+  await env.DB.prepare(
+    `UPDATE license_keys
+     SET bound_user_id = ?2,
+         bound_device_id = ?3,
+         redeemed_at = ?4,
+         expires_at = ?5,
+         updated_at = ?6
+     WHERE license_key = ?1`
+  )
+    .bind(
+      key,
+      updatedRow.bound_user_id,
+      updatedRow.bound_device_id,
+      updatedRow.redeemed_at,
+      updatedRow.expires_at,
+      updatedRow.updated_at
+    )
+    .run();
+
+  const queued = await queueCommandForSessions(env.DB, {
+    key,
+    onlyOnline: true,
+  }, "reauth", {
+    message: "Session requires re-verification.",
+  });
+
+  return json({
+    ok: true,
+    key,
+    boundUserId: normalizeOptionalText(updatedRow.bound_user_id),
+    boundDeviceId: normalizeOptionalText(updatedRow.bound_device_id),
+    redeemedAt: normalizeOptionalText(updatedRow.redeemed_at),
+    expiresAt: normalizeOptionalText(updatedRow.expires_at),
+    reauthSessions: queued.count,
+  });
+}
+
+async function setSessionCommand(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const command = normalizeText(body.command);
+  if (!command) {
+    return json({ ok: false, error: "command is required." }, 400);
+  }
+
+  const validCommands = new Set(["terminate", "reauth", "notify"]);
+  if (!validCommands.has(command)) {
+    return json({ ok: false, error: "Unsupported command." }, 400);
+  }
+
+  const filters = {
+    sessionId: normalizeText(body.sessionId),
+    key: normalizeText(body.key),
+    userId: normalizeText(body.userId),
+    onlyOnline: body.onlyOnline !== false,
+  };
+
+  if (!filters.sessionId && !filters.key && !filters.userId) {
+    return json({ ok: false, error: "Provide sessionId, key or userId." }, 400);
+  }
+
+  const queued = await queueCommandForSessions(env.DB, filters, command, {
+    message: normalizeText(body.message),
+  });
+
+  return json({
+    ok: true,
+    command,
+    queuedSessions: queued.count,
+    nonce: queued.nonce,
+  });
+}
+
+async function getMaintenance(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  return json({
+    ok: true,
+    maintenance: await getMaintenanceState(env.DB),
+  });
+}
+
+async function setMaintenance(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const body = await readJson(request);
+  if (!body) {
+    return json({ ok: false, error: "Invalid JSON body." }, 400);
+  }
+
+  const enabled = body.enabled === true;
+  const message = normalizeText(body.message);
+  const maintenance = await setMaintenanceState(env.DB, enabled, message);
+
+  return json({
+    ok: true,
+    maintenance,
+  });
+}
+
+async function listLicenses(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const licenses = await queryAll(
+    env.DB.prepare("SELECT * FROM license_keys ORDER BY updated_at DESC, created_at DESC")
+  );
+  const sessions = await queryAll(
+    env.DB.prepare("SELECT * FROM live_sessions ORDER BY last_seen_at DESC")
+  );
+
+  const onlineCounts = new Map();
+  for (const session of sessions) {
+    if (!isSessionOnline(session)) {
+      continue;
+    }
+
+    onlineCounts.set(
+      session.license_key,
+      (onlineCounts.get(session.license_key) || 0) + 1
+    );
+  }
+
+  return json({
+    ok: true,
+    maintenance: await getMaintenanceState(env.DB),
+    licenses: licenses.map((row) => buildAdminLicenseRecord(row, onlineCounts.get(row.license_key) || 0)),
+  });
+}
+
+async function listUsers(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const licenses = await queryAll(
+    env.DB.prepare("SELECT * FROM license_keys ORDER BY updated_at DESC")
+  );
+  const sessions = await queryAll(
+    env.DB.prepare("SELECT * FROM live_sessions ORDER BY last_seen_at DESC")
+  );
+
+  return json({
+    ok: true,
+    users: buildAdminUserRecords(licenses, sessions),
+  });
+}
+
+async function listOnlineSessions(request, env) {
+  if (!isAdmin(request, env)) {
+    return authFailed();
+  }
+
+  const sessions = await queryAll(
+    env.DB.prepare("SELECT * FROM live_sessions ORDER BY last_seen_at DESC")
+  );
+  const licenses = await queryAll(
+    env.DB.prepare("SELECT * FROM license_keys ORDER BY updated_at DESC")
+  );
+
+  const licensesByKey = new Map(
+    licenses.map((row) => [row.license_key, row])
+  );
+
+  return json({
+    ok: true,
+    online: sessions
+      .filter((row) => isSessionOnline(row))
+      .map((row) => {
+        const license = licensesByKey.get(row.license_key);
+        return {
+          ...buildSessionPayload(row, buildPendingSessionCommand(row)),
+          tier: license ? license.tier : null,
+          expiresAt: license ? normalizeOptionalText(license.expires_at) : null,
+          remainingSeconds: license ? getRemainingSeconds(license) : null,
+          licenseStatus: license ? license.status : null,
+        };
+      }),
+  });
+}
+
+function renderAdminPanel() {
+  return new Response(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>N(n)enjoyer Admin</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: rgba(18, 24, 43, 0.92);
+      --panel-2: rgba(27, 35, 60, 0.9);
+      --line: rgba(118, 143, 255, 0.2);
+      --text: #eef2ff;
+      --muted: #9aa7cc;
+      --accent: #5f87ff;
+      --accent-2: #7ba2ff;
+      --danger: #ff6b84;
+      --warn: #ffbf69;
+      --ok: #57d394;
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(95, 135, 255, 0.18), transparent 35%),
+        radial-gradient(circle at top right, rgba(87, 211, 148, 0.12), transparent 28%),
+        linear-gradient(180deg, #0b1020 0%, #070b16 100%);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    .hero, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(18px);
+    }
+
+    .hero {
+      padding: 24px;
+      margin-bottom: 18px;
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1.8fr 1fr auto auto;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .toolbar-secondary {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 12px;
+      margin-top: 12px;
+      align-items: center;
+    }
+
+    input, button {
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 12px 14px;
+      font: inherit;
+    }
+
+    input::placeholder {
+      color: #7e8cb2;
+    }
+
+    button {
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease, border-color 0.15s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(123, 162, 255, 0.45);
+    }
+
+    button.primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: white;
+      border: none;
+    }
+
+    button.danger {
+      background: rgba(255, 107, 132, 0.15);
+      color: #ffdbe2;
+    }
+
+    button.warn {
+      background: rgba(255, 191, 105, 0.12);
+      color: #ffe1b8;
+    }
+
+    .statusbar {
+      margin: 16px 0 20px;
+      color: var(--muted);
+      min-height: 20px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .card {
+      padding: 18px;
+    }
+
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: rgba(95, 135, 255, 0.12);
+      color: #cfd9ff;
+      border: 1px solid rgba(95, 135, 255, 0.18);
+    }
+
+    .pill.ok { background: rgba(87, 211, 148, 0.14); color: #d8ffe8; border-color: rgba(87, 211, 148, 0.24); }
+    .pill.warn { background: rgba(255, 191, 105, 0.14); color: #ffe5c0; border-color: rgba(255, 191, 105, 0.24); }
+    .pill.danger { background: rgba(255, 107, 132, 0.14); color: #ffd4dc; border-color: rgba(255, 107, 132, 0.24); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 10px 8px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    td code {
+      font-family: Consolas, monospace;
+      color: #d7e0ff;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .actions button {
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 16px 0 4px;
+    }
+
+    @media (max-width: 1180px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .toolbar,
+      .toolbar-secondary {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>N(n)enjoyer Admin</h1>
+      <p>Manage licenses, live sessions and maintenance from one place.</p>
+      <div class="toolbar">
+        <input id="token" type="password" placeholder="Paste ADMIN_TOKEN">
+        <input id="maintenanceMessage" type="text" placeholder="Maintenance message">
+        <button id="saveToken">Save Token</button>
+        <button id="refresh" class="primary">Refresh</button>
+      </div>
+      <div class="toolbar-secondary">
+        <label class="pill" style="justify-self:start;">
+          <input id="maintenanceEnabled" type="checkbox" style="margin:0;">
+          <span>Maintenance mode</span>
+        </label>
+        <div class="statusbar" id="status">Enter your ADMIN_TOKEN and press Refresh.</div>
+        <button id="applyMaintenance" class="warn">Apply Maintenance</button>
+      </div>
+    </section>
+
+    <div class="grid">
+      <div class="stack">
+        <section class="card">
+          <h2>Online Sessions</h2>
+          <div id="onlineWrap" class="empty">No data yet.</div>
+        </section>
+
+        <section class="card">
+          <h2>Licenses</h2>
+          <div id="licensesWrap" class="empty">No data yet.</div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="card">
+          <h2>Users</h2>
+          <div id="usersWrap" class="empty">No data yet.</div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const storageKey = "nnenjoyer_admin_token";
+    const tokenInput = document.getElementById("token");
+    const maintenanceEnabledInput = document.getElementById("maintenanceEnabled");
+    const maintenanceMessageInput = document.getElementById("maintenanceMessage");
+    const statusEl = document.getElementById("status");
+    const onlineWrap = document.getElementById("onlineWrap");
+    const licensesWrap = document.getElementById("licensesWrap");
+    const usersWrap = document.getElementById("usersWrap");
+
+    tokenInput.value = loca
