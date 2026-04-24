@@ -84,16 +84,42 @@ combinedSource = mustReplace(
 
 combinedSource = mustReplace(
     combinedSource,
-    [[            task.spawn(function()
+    [[        Content = "Minimize Bind: RightAlt"]],
+    [[        Content = "Minimize Bind: RightAlt / RightCtrl"]],
+    "settings minimize text"
+)
+
+combinedSource = mustReplace(
+    combinedSource,
+    [[        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.RightAlt then
+            local now = os.clock()
+            if now - lastMinimizeToggleTime < 0.15 then
+                return
+            end
+
+            lastMinimizeToggleTime = now
+            task.spawn(function()
                 local toggled = toggleWindowVisibility()
                 if not toggled then
                     notify("Minimize Bind", "The interface is busy right now. Try again in a moment.")
                 end
-            end)]],
-    [[            task.spawn(function()
+            end)
+            return
+        end]],
+    [[        if input.UserInputType == Enum.UserInputType.Keyboard and
+            (input.KeyCode == Enum.KeyCode.RightAlt or input.KeyCode == Enum.KeyCode.RightControl) then
+            local now = os.clock()
+            if now - lastMinimizeToggleTime < 0.15 then
+                return
+            end
+
+            lastMinimizeToggleTime = now
+            task.spawn(function()
                 toggleWindowVisibility()
-            end)]],
-    "RightAlt minimize handler"
+            end)
+            return
+        end]],
+    "minimize input handler"
 )
 
 local compiled, compileError = loadstring(combinedSource, "@ultra_power_impl_v2")
