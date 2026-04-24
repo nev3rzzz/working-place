@@ -1,0 +1,21 @@
+          task.spawn(equipConfiguredTools)
+            return
+        end
+
+        if doesBindMatch(aimMouseToggleBind, input) then
+            local nextValue = not aimMouseAtTargetEnabled
+            if aimMouseToggleControl and aimMouseToggleControl.SetValue then
+                pcall(function()
+                    aimMouseToggleControl:SetValue(nextValue)
+                end)
+            else
+                setAimMouseAtTargetEnabled(nextValue)
+            end
+        end
+    end)
+
+    notify("Ultra Power", "Authorized as " .. authTier .. ".")
+    return {
+        shutdown = shutdown
+    }
+end
