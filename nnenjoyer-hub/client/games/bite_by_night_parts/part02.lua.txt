@@ -1,0 +1,449 @@
+            local myRoot = getRoot()
+            if not myRoot then
+                return
+            end
+
+            local targetFolderName = myTeam == "ALIVE" and "KILLER" or "ALIVE"
+            local playersFolder = getPlayersFolder()
+            local targetFolder = playersFolder and playersFolder:FindFirstChild(targetFolderName)
+            if not targetFolder then
+                return
+            end
+
+            local closestRoot = nil
+            local shortestDistance = math.huge
+
+            for _, otherPlayer in ipairs(Players:GetPlayers()) do
+                if otherPlayer ~= LocalPlayer and otherPlayer.Character and otherPlayer.Character.Parent == targetFolder then
+                    local otherRoot = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    if otherRoot then
+                        local distance = (myRoot.Position - otherRoot.Position).Magnitude
+                        if distance < shortestDistance then
+                            shortestDistance = distance
+                            closestRoot = otherRoot
+                        end
+                    end
+                end
+            end
+
+            if closestRoot then
+                lockedTarget = closestRoot
+            end
+        end)
+
+        aimlockRenderConn = RunService.RenderStepped:Connect(function()
+            if lockedTarget and lockedTarget.Parent then
+                local camera = getCamera()
+                if camera then
+                    camera.CFrame = CFrame.new(camera.CFrame.Position, lockedTarget.Position)
+                end
+            else
+                lockedTarget = nil
+            end
+        end)
+
+        notify("Aimlock", "Enabled.")
+    end
+
+    local function setNoclipEnabled(state)
+        noclipEnabled = state == true
+
+        if noclipConn then
+            noclipConn:Disconnect()
+            noclipConn = nil
+        end
+
+        if not noclipEnabled then
+            local character = LocalPlayer.Character
+            if character then
+                for _, part in ipairs(character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = true
+                    end
+                end
+            end
+            notify("Noclip", "Disabled.")
+            return
+        end
+
+        noclipConn = RunService.Stepped:Connect(function()
+            if not noclipEnabled then
+                return
+            end
+
+            local character = LocalPlayer.Character
+            if not character then
+                return
+            end
+
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end)
+
+        notify("Noclip", "Enabled.")
+    end
+
+    local function setFullBrightEnabled(state)
+        if state then
+            oldLighting.Brightness = Lighting.Brightness
+            oldLighting.ClockTime = Lighting.ClockTime
+            oldLighting.FogEnd = Lighting.FogEnd
+            oldLighting.GlobalShadows = Lighting.GlobalShadows
+            oldLighting.Ambient = Lighting.Ambient
+
+            Lighting.Brightness = 5
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = false
+            Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+            notify("Full Bright", "Enabled.")
+            return
+        end
+
+        if next(oldLighting) then
+            Lighting.Brightness = oldLighting.Brightness
+            Lighting.ClockTime = oldLighting.ClockTime
+            Lighting.FogEnd = oldLighting.FogEnd
+            Lighting.GlobalShadows = oldLighting.GlobalShadows
+            Lighting.Ambient = oldLighting.Ambient
+        end
+
+        notify("Full Bright", "Disabled.")
+    end
+
+    local function setFreeCamEnabled(state)
+        freeCamEnabled = state == true
+
+        if freeCamConn then
+            freeCamConn:Disconnect()
+            freeCamConn = nil
+        end
+
+        local character = LocalPlayer.Character
+        if not character then
+            return
+        end
+
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local camera = getCamera()
+
+        if not root or not humanoid or not camera then
+            return
+        end
+
+        if not freeCamEnabled then
+            if freeCamPart then
+                freeCamPart:Destroy()
+                freeCamPart = nil
+            end
+
+            camera.CameraType = Enum.CameraType.Custom
+            if savedCharCFrame then
+                root.CFrame = savedCharCFrame
+            end
+
+            root.Anchored = false
+            humanoid.WalkSpeed = 12
+            humanoid.JumpHeight = 7.2
+            notify("Free Cam", "Disabled.")
+            return
+        end
+
+        savedCharCFrame = root.CFrame
+        root.Anchored = true
+        humanoid.WalkSpeed = 0
+        humanoid.JumpHeight = 0
+
+        freeCamPart = Instance.new("Part")
+        freeCamPart.Size = Vector3.new(1, 1, 1)
+        freeCamPart.Anchored = true
+        freeCamPart.CanCollide = false
+        freeCamPart.Transparency = 1
+        freeCamPart.CFrame = camera.CFrame
+        freeCamPart.Parent = Workspace
+
+        camera.CameraType = Enum.CameraType.Scriptable
+        camera.CFrame = freeCamPart.CFrame
+
+        local moveSpeed = 0.5
+        local sprintMultiplier = 3
+
+        freeCamConn = RunService.RenderStepped:Connect(function()
+            if not freeCamEnabled or not freeCamPart or not freeCamPart.Parent then
+                return
+            end
+
+            local cf = freeCamPart.CFrame
+            local moveVector = Vector3.zero
+            local sprint = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) and sprintMultiplier or 1
+            local currentSpeed = moveSpeed * sprint
+
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+                moveVector += cf.LookVector * currentSpeed
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+                moveVector -= cf.LookVector * currentSpeed
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+                moveVector -= cf.RightVector * currentSpeed
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+                moveVector += cf.RightVector * currentSpeed
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.E) then
+                moveVector += Vector3.new(0, currentSpeed, 0)
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Q) then
+                moveVector -= Vector3.new(0, currentSpeed, 0)
+            end
+
+            freeCamPart.CFrame = CFrame.new(freeCamPart.Position + moveVector) * (cf - cf.Position)
+            local activeCamera = getCamera()
+            if activeCamera then
+                activeCamera.CFrame = freeCamPart.CFrame
+            end
+        end)
+
+        notify("Free Cam", "Enabled. WASD/Q/E - move, Shift - speed boost.")
+    end
+
+    local function setAutoGeneratorEnabled(state)
+        autogen = state == true
+
+        if autoGeneratorConn then
+            autoGeneratorConn:Disconnect()
+            autoGeneratorConn = nil
+        end
+
+        if autoGeneratorFireConn then
+            autoGeneratorFireConn:Disconnect()
+            autoGeneratorFireConn = nil
+        end
+
+        lastAutoGeneratorFireTime = 0
+
+        if not autogen then
+            notify("Auto Generator", "Disabled.")
+            return
+        end
+
+        autoGeneratorConn = RunService.Heartbeat:Connect(function()
+            local generatorGui = LocalPlayer.PlayerGui:FindFirstChild("Gen")
+
+            if generatorGui then
+                if not autoGeneratorFireConn then
+                    lastAutoGeneratorFireTime = tick()
+                    autoGeneratorFireConn = RunService.Heartbeat:Connect(function()
+                        if not autogen then
+                            return
+                        end
+
+                        local currentTime = tick()
+                        local delayValue = 0
+
+                        if generatorMode == "Silent" then
+                            delayValue = 7
+                        elseif generatorMode == "Custom" then
+                            delayValue = customGeneratorDelay
+                        end
+
+                        if currentTime - lastAutoGeneratorFireTime >= delayValue then
+                            local event = LocalPlayer.PlayerGui:FindFirstChild("Gen")
+                            event = event and event:FindFirstChild("GeneratorMain")
+                            event = event and event:FindFirstChild("Event")
+                            if event then
+                                event:FireServer({
+                                    Wires = true,
+                                    Switches = true,
+                                    Lever = true
+                                })
+                                lastAutoGeneratorFireTime = currentTime
+                            end
+                        end
+                    end)
+                end
+            else
+                if autoGeneratorFireConn then
+                    autoGeneratorFireConn:Disconnect()
+                    autoGeneratorFireConn = nil
+                end
+                lastAutoGeneratorFireTime = 0
+            end
+        end)
+
+        notify("Auto Generator", "Enabled.")
+    end
+
+    local function setAutoEscapeEnabled(state)
+        autoEscape = state == true
+
+        if autoEscapeConn then
+            autoEscapeConn:Disconnect()
+            autoEscapeConn = nil
+        end
+
+        if not autoEscape then
+            notify("Auto Escape", "Disabled.")
+            return
+        end
+
+        local teleported = false
+
+        autoEscapeConn = RunService.RenderStepped:Connect(function()
+            if teleported or not autoEscape then
+                return
+            end
+
+            local character = LocalPlayer.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if not character or not root then
+                return
+            end
+
+            local gameFolder = Workspace:FindFirstChild("GAME")
+            local canEscape = gameFolder and gameFolder:FindFirstChild("CAN_ESCAPE")
+            if not canEscape or canEscape.Value ~= true then
+                return
+            end
+
+            local playersFolder = getPlayersFolder()
+            local aliveFolder = playersFolder and playersFolder:FindFirstChild("ALIVE")
+            if not aliveFolder or character.Parent ~= aliveFolder then
+                return
+            end
+
+            local mapsFolder = Workspace:FindFirstChild("MAPS")
+            local gameMap = mapsFolder and mapsFolder:FindFirstChild("GAME MAP")
+            local escapes = gameMap and gameMap:FindFirstChild("Escapes")
+            if not escapes then
+                return
+            end
+
+            for _, part in ipairs(escapes:GetChildren()) do
+                if part:IsA("BasePart") and part:GetAttribute("Enabled") then
+                    local highlight = part:FindFirstChildOfClass("Highlight")
+                    if highlight and highlight.Enabled then
+                        teleported = true
+                        root.Anchored = true
+                        task.spawn(function()
+                            lerpMoveShared(part.CFrame)
+                        end)
+                        task.delay(0.5, function()
+                            if root and root.Parent then
+                                root.Anchored = false
+                            end
+                        end)
+                        task.delay(10, function()
+                            teleported = false
+                        end)
+                        return
+                    end
+                end
+            end
+        end)
+
+        notify("Auto Escape", "Enabled (Smooth Movement).")
+    end
+
+    local function setAutoBarricadeEnabled(state)
+        autoBarricadeEnabled = state == true
+
+        if autoBarricadeConn then
+            autoBarricadeConn:Disconnect()
+            autoBarricadeConn = nil
+        end
+
+        if not autoBarricadeEnabled then
+            notify("Auto Barricade", "Disabled.")
+            return
+        end
+
+        local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+        autoBarricadeConn = RunService.RenderStepped:Connect(function()
+            local dot = playerGui:FindFirstChild("Dot")
+            if dot and dot:IsA("ScreenGui") then
+                local container = dot:FindFirstChild("Container")
+                local frame = container and container:FindFirstChild("Frame")
+                if frame and frame:IsA("GuiObject") then
+                    if not dot.Enabled then
+                        dot:Destroy()
+                        return
+                    end
+                    frame.AnchorPoint = Vector2.new(0.5, 0.5)
+                    frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+                end
+            end
+        end)
+
+        notify("Auto Barricade", "Enabled.")
+    end
+
+    local function setInstantInteractEnabled(state)
+        instantInteract = state == true
+
+        for _, connection in ipairs(promptConnections) do
+            if connection then
+                connection:Disconnect()
+            end
+        end
+        promptConnections = {}
+
+        if not instantInteract then
+            notify("Instant Interact", "Disabled.")
+            return
+        end
+
+        local function applyToPrompts(container)
+            for _, prompt in ipairs(container:GetDescendants()) do
+                if prompt:IsA("ProximityPrompt") then
+                    prompt.HoldDuration = 0
+                end
+            end
+        end
+
+        for _, object in ipairs(Workspace:GetDescendants()) do
+            if (object.Name == "Generator" and object:IsA("Model")) or
+                (object.Name == "Battery" and object:IsA("MeshPart")) then
+                applyToPrompts(object)
+            end
+        end
+
+        promptConnections[#promptConnections + 1] = Workspace.DescendantAdded:Connect(function(descendant)
+            if descendant:IsA("ProximityPrompt") then
+                local generatorAncestor = descendant:FindFirstAncestor("Generator")
+                local batteryAncestor = descendant:FindFirstAncestor("Battery")
+                if generatorAncestor or batteryAncestor then
+                    descendant.HoldDuration = 0
+                end
+            end
+        end)
+
+        notify("Instant Interact", "Enabled.")
+    end
+
+    local function setSafetyAreaEnabled(state)
+        safeTeleport = state == true
+
+        local root = getRoot()
+        if not root then
+            return
+        end
+
+        if safeTeleport then
+            local pos = root.Position
+            safePart = Instance.new("Part")
+            safePart.Size = Vector3.new(50, 1, 50)
+            safePart.Anchored = true
+            safePart.Position = pos - Vector3.new(0, 100, 0)
+            safePart.Name = "SafetyPlate"
+            safePart.Parent = Workspace
+
+            task.spawn(function()
+                lerpMoveShared(CFrame.new(pos - Vector3.new(0, 95, 0)))
+            end)
+
+            notify("Safety Area", "Enabled.")
