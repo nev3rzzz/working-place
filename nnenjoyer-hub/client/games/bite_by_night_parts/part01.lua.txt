@@ -52,10 +52,6 @@ return function(context)
             Title = "Teleport",
             Icon = "map-pinned"
         }),
-        Others = window:AddTab({
-            Title = "Others",
-            Icon = "wrench"
-        }),
         Settings = window:AddTab({
             Title = "Settings",
             Icon = "settings"
@@ -197,6 +193,8 @@ return function(context)
     local aimlockBind = Enum.UserInputType.MouseButton2
     local aimlockInputConn = nil
     local aimlockRenderConn = nil
+    local aimlockBindCaptureConn = nil
+    local aimlockBindParagraph = nil
 
     local noclipEnabled = false
     local noclipConn = nil
@@ -272,6 +270,65 @@ return function(context)
     local generatorIndex = 1
     local batteryIndex = 1
     local fuseIndex = 1
+
+    local function getAimlockBindDisplay()
+        if typeof(aimlockBind) == "EnumItem" then
+            return aimlockBind.Name
+        end
+
+        return tostring(aimlockBind or "MouseButton2")
+    end
+
+    local function updateAimlockBindParagraph()
+        if not aimlockBindParagraph then
+            return
+        end
+
+        pcall(function()
+            if aimlockBindParagraph.SetDesc then
+                aimlockBindParagraph:SetDesc(getAimlockBindDisplay())
+            elseif aimlockBindParagraph.SetContent then
+                aimlockBindParagraph:SetContent(getAimlockBindDisplay())
+            end
+        end)
+    end
+
+    local function stopAimlockBindCapture()
+        if aimlockBindCaptureConn then
+            aimlockBindCaptureConn:Disconnect()
+            aimlockBindCaptureConn = nil
+        end
+    end
+
+    local function beginAimlockBindCapture()
+        stopAimlockBindCapture()
+        notify("Aimlock Bind", "Press a key or mouse button to set the bind.")
+
+        aimlockBindCaptureConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then
+                return
+            end
+
+            local newBind = nil
+
+            if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+                newBind = input.KeyCode
+            elseif input.UserInputType == Enum.UserInputType.MouseButton1 or
+                input.UserInputType == Enum.UserInputType.MouseButton2 or
+                input.UserInputType == Enum.UserInputType.MouseButton3 then
+                newBind = input.UserInputType
+            end
+
+            if not newBind then
+                return
+            end
+
+            aimlockBind = newBind
+            updateAimlockBindParagraph()
+            stopAimlockBindCapture()
+            notify("Aimlock Bind", "Bind set to: " .. getAimlockBindDisplay())
+        end)
+    end
 
     local function setInfiniteSprintEnabled(state)
         infiniteSprint = state == true
@@ -448,3 +505,20 @@ return function(context)
             if not myTeam then
                 return
             end
+
+            local myRoot = getRoot()
+            if not myRoot then
+                return
+            end
+
+            local targetFolderName = myTeam == "ALIVE" and "KILLER" or "ALIVE"
+            local playersFolder = getPlayersFolder()
+            local targetFolder = playersFolder and playersFolder:FindFirstChild(targetFolderName)
+            if not targetFolder then
+                return
+            end
+
+            local closestRoot = nil
+            local shortestDistance = math.huge
+
+            for _, otherPlayer in ipairs(Players:GetPlayers()) do
