@@ -18,7 +18,7 @@ local CONFIG = {
 local GAME_LOADERS = {
     [8146731988] = {
         name = "Ultra Power",
-        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/ultra_power.lua"
+        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/66046dae50b5a9edde6f249b29778281a968e0dc/nnenjoyer-hub/client/games/ultra_power.lua"
     }
 }
 
