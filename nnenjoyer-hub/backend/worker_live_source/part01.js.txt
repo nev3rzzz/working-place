@@ -1,0 +1,630 @@
+const DEFAULT_SUPPORTED_PLACE_IDS = [
+  "8146731988",
+  "70845479499574",
+];
+
+const HEARTBEAT_INTERVAL_SECONDS = 25;
+const ONLINE_SESSION_TIMEOUT_SECONDS = 90;
+const MAINTENANCE_SETTING_KEY = "maintenance_mode";
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function normalizeText(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+function normalizeOptionalText(value) {
+  const text = normalizeText(value);
+  return text || null;
+}
+
+function parseStoredJson(value, fallback = null) {
+  const text = normalizeText(value);
+  if (!text) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+function serializeJson(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return JSON.stringify(value);
+}
+
+function toIso(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return null;
+  }
+
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function safeDateMs(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return null;
+  }
+
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.getTime();
+}
+
+function toPositiveInteger(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) {
+    return null;
+  }
+
+  return number;
+}
+
+function normalizeIdList(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const source = Array.isArray(value) ? value : [value];
+  const unique = new Set();
+
+  for (const entry of source) {
+    const normalized = normalizeText(entry);
+    if (normalized) {
+      unique.add(normalized);
+    }
+  }
+
+  const result = Array.from(unique);
+  return result.length > 0 ? result : null;
+}
+
+function parseStoredIdList(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return [];
+  }
+
+  try {
+    const decoded = JSON.parse(text);
+    return normalizeIdList(decoded) || [];
+  } catch {
+    return normalizeIdList(text) || [];
+  }
+}
+
+function serializeIdList(list) {
+  const normalized = normalizeIdList(list);
+  return normalized ? JSON.stringify(normalized) : null;
+}
+
+function normalizeUrl(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return new URL(text).toString();
+  } catch {
+    return null;
+  }
+}
+
+function generateRandomId(byteLength = 16) {
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function authFailed() {
+  return json({ ok: false, error: "Unauthorized." }, 401);
+}
+
+function isAdmin(request, env) {
+  const authHeader = normalizeText(request.headers.get("authorization"));
+  if (!authHeader.startsWith("Bearer ")) {
+    return false;
+  }
+
+  const token = authHeader.slice("Bearer ".length).trim();
+  return token && env.ADMIN_TOKEN && token === env.ADMIN_TOKEN;
+}
+
+async function readJson(request) {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
+
+async function queryAll(statement) {
+  const result = await statement.all();
+  return result.results || [];
+}
+
+function validateWindow(startsAt, expiresAt) {
+  if (startsAt && !toIso(startsAt)) {
+    return "startsAt must be a valid ISO date.";
+  }
+
+  if (expiresAt && !toIso(expiresAt)) {
+    return "expiresAt must be a valid ISO date.";
+  }
+
+  if (startsAt && expiresAt) {
+    const start = new Date(startsAt).getTime();
+    const end = new Date(expiresAt).getTime();
+    if (end <= start) {
+      return "expiresAt must be later than startsAt.";
+    }
+  }
+
+  return null;
+}
+
+function generateLicenseKey() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const makeChunk = (length) => {
+    const bytes = crypto.getRandomValues(new Uint8Array(length));
+    let result = "";
+
+    for (let index = 0; index < length; index += 1) {
+      result += alphabet[bytes[index] % alphabet.length];
+    }
+
+    return result;
+  };
+
+  return [makeChunk(4), makeChunk(4), makeChunk(4), makeChunk(4)].join("-");
+}
+
+async function findLicense(db, key) {
+  return db
+    .prepare("SELECT * FROM license_keys WHERE license_key = ?1 LIMIT 1")
+    .bind(key)
+    .first();
+}
+
+async function findSession(db, sessionId) {
+  return db
+    .prepare("SELECT * FROM live_sessions WHERE session_id = ?1 LIMIT 1")
+    .bind(sessionId)
+    .first();
+}
+
+async function getSetting(db, key) {
+  return db
+    .prepare("SELECT * FROM system_settings WHERE setting_key = ?1 LIMIT 1")
+    .bind(key)
+    .first();
+}
+
+async function setSetting(db, key, value) {
+  const updatedAt = nowIso();
+
+  await db.prepare(
+    `INSERT INTO system_settings (setting_key, setting_value, updated_at)
+     VALUES (?1, ?2, ?3)
+     ON CONFLICT(setting_key) DO UPDATE
+     SET setting_value = excluded.setting_value,
+         updated_at = excluded.updated_at`
+  )
+    .bind(key, value, updatedAt)
+    .run();
+
+  return {
+    setting_key: key,
+    setting_value: value,
+    updated_at: updatedAt,
+  };
+}
+
+function normalizeMaintenanceState(value, updatedAt = null) {
+  const decoded = parseStoredJson(value, null);
+  if (decoded && typeof decoded === "object") {
+    return {
+      enabled: decoded.enabled === true,
+      message: normalizeText(decoded.message),
+      updatedAt: normalizeOptionalText(decoded.updatedAt ?? updatedAt),
+    };
+  }
+
+  return {
+    enabled: false,
+    message: "",
+    updatedAt: normalizeOptionalText(updatedAt),
+  };
+}
+
+async function getMaintenanceState(db) {
+  const row = await getSetting(db, MAINTENANCE_SETTING_KEY);
+  if (!row) {
+    return {
+      enabled: false,
+      message: "",
+      updatedAt: null,
+    };
+  }
+
+  return normalizeMaintenanceState(row.setting_value, row.updated_at);
+}
+
+async function setMaintenanceState(db, enabled, message) {
+  const state = {
+    enabled: enabled === true,
+    message: normalizeText(message),
+    updatedAt: nowIso(),
+  };
+
+  await setSetting(db, MAINTENANCE_SETTING_KEY, JSON.stringify(state));
+  return state;
+}
+
+function buildMaintenanceCommand(state) {
+  if (!state || state.enabled !== true) {
+    return null;
+  }
+
+  return {
+    nonce: `maintenance:${normalizeText(state.updatedAt) || "0"}`,
+    type: "maintenance",
+    message: normalizeText(state.message) || "Maintenance mode is active.",
+    updatedAt: state.updatedAt || null,
+  };
+}
+
+function maintenanceErrorResponse(state) {
+  const message = normalizeText(state && state.message) || "Maintenance mode is active.";
+  return json({ ok: false, error: message, code: "maintenance_mode" }, 503);
+}
+
+function evaluateTimeWindow(row) {
+  const now = Date.now();
+
+  if (row.starts_at) {
+    const startsAt = new Date(row.starts_at).getTime();
+    if (!Number.isNaN(startsAt) && now < startsAt) {
+      return { ok: false, error: "Key is not active yet.", code: "not_started" };
+    }
+  }
+
+  if (row.expires_at) {
+    const expiresAt = new Date(row.expires_at).getTime();
+    if (!Number.isNaN(expiresAt) && now >= expiresAt) {
+      return { ok: false, error: "Key has expired.", code: "expired" };
+    }
+  }
+
+  return { ok: true };
+}
+
+function evaluateGameAccess(row, placeId, gameId) {
+  const allowedPlaceIds = parseStoredIdList(row.allowed_place_ids);
+  const allowedGameIds = parseStoredIdList(row.allowed_game_ids);
+  const normalizedPlaceId = normalizeText(placeId);
+  const normalizedGameId = normalizeText(gameId);
+
+  if (allowedPlaceIds.length > 0) {
+    if (!normalizedPlaceId) {
+      return { ok: false, error: "placeId is required for this key.", code: "missing_place" };
+    }
+
+    if (!allowedPlaceIds.includes(normalizedPlaceId)) {
+      return { ok: false, error: `This key is not allowed in PlaceId ${normalizedPlaceId}.`, code: "place_blocked" };
+    }
+  }
+
+  if (allowedGameIds.length > 0) {
+    if (!normalizedGameId) {
+      return { ok: false, error: "gameId is required for this key.", code: "missing_game" };
+    }
+
+    if (!allowedGameIds.includes(normalizedGameId)) {
+      return { ok: false, error: `This key is not allowed in GameId ${normalizedGameId}.`, code: "game_blocked" };
+    }
+  }
+
+  return { ok: true };
+}
+
+function getRemainingSeconds(row) {
+  const expiresAtMs = safeDateMs(row.expires_at);
+  if (expiresAtMs === null) {
+    return null;
+  }
+
+  return Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000));
+}
+
+function buildLicensePayload(row) {
+  return {
+    ok: true,
+    key: row.license_key,
+    tier: row.tier,
+    startsAt: row.starts_at,
+    expiresAt: row.expires_at,
+    status: row.status,
+    redeemedAt: row.redeemed_at,
+    durationSeconds: row.duration_seconds ?? null,
+    scriptUrl: row.script_url || null,
+    allowedPlaceIds: parseStoredIdList(row.allowed_place_ids),
+    allowedGameIds: parseStoredIdList(row.allowed_game_ids),
+    boundUserId: normalizeOptionalText(row.bound_user_id),
+    boundDeviceId: normalizeOptionalText(row.bound_device_id),
+    lastValidatedAt: normalizeOptionalText(row.last_validated_at),
+    remainingSeconds: getRemainingSeconds(row),
+    note: normalizeOptionalText(row.note),
+  };
+}
+
+function isSessionOnline(row) {
+  if (normalizeText(row.status) !== "active") {
+    return false;
+  }
+
+  const lastSeenMs = safeDateMs(row.last_seen_at);
+  if (lastSeenMs === null) {
+    return false;
+  }
+
+  return (Date.now() - lastSeenMs) <= (ONLINE_SESSION_TIMEOUT_SECONDS * 1000);
+}
+
+function buildSessionPayload(row, command = null) {
+  return {
+    sessionId: row.session_id,
+    key: row.license_key,
+    userId: row.user_id,
+    deviceId: row.device_id,
+    placeId: normalizeOptionalText(row.place_id),
+    gameId: normalizeOptionalText(row.game_id),
+    gameName: normalizeOptionalText(row.game_name),
+    jobId: normalizeOptionalText(row.job_id),
+    executor: normalizeOptionalText(row.executor),
+    platform: normalizeOptionalText(row.platform),
+    status: row.status,
+    startedAt: row.started_at,
+    lastSeenAt: row.last_seen_at,
+    endedAt: normalizeOptionalText(row.ended_at),
+    online: isSessionOnline(row),
+    command,
+  };
+}
+
+function buildPendingSessionCommand(row) {
+  const commandType = normalizeText(row.pending_command);
+  const commandNonce = normalizeText(row.command_nonce);
+  if (!commandType || !commandNonce) {
+    return null;
+  }
+
+  const payload = parseStoredJson(row.command_payload, {});
+  return {
+    nonce: commandNonce,
+    type: commandType,
+    updatedAt: normalizeOptionalText(row.command_updated_at),
+    ...((payload && typeof payload === "object") ? payload : {}),
+  };
+}
+
+function buildAccessFailureCommand(accessResult, row, maintenanceState) {
+  const maintenanceCommand = buildMaintenanceCommand(maintenanceState);
+  if (maintenanceCommand) {
+    return maintenanceCommand;
+  }
+
+  if (!accessResult || accessResult.ok) {
+    return null;
+  }
+
+  const rowMarker = normalizeText(
+    row && (row.updated_at || row.expires_at || row.redeemed_at || row.created_at)
+  ) || "0";
+
+  if (
+    accessResult.code === "not_found" ||
+    accessResult.code === "user_mismatch" ||
+    accessResult.code === "device_mismatch"
+  ) {
+    return {
+      nonce: `reauth:${accessResult.code}:${rowMarker}`,
+      type: "reauth",
+      message: accessResult.error,
+    };
+  }
+
+  return {
+    nonce: `terminate:${accessResult.code || "blocked"}:${rowMarker}`,
+    type: "terminate",
+    message: accessResult.error,
+  };
+}
+
+async function authorizeLicenseAccess(env, payload, options = {}) {
+  const key = normalizeText(payload.key);
+  const userId = normalizeText(payload.userId);
+  const deviceId = normalizeText(payload.deviceId);
+  const placeId = normalizeText(payload.placeId);
+  const gameId = normalizeText(payload.gameId);
+
+  if (!key || !userId || !deviceId) {
+    return {
+      ok: false,
+      status: 400,
+      code: "missing_identity",
+      error: "key, userId and deviceId are required.",
+    };
+  }
+
+  if (options.skipMaintenance !== true) {
+    const maintenanceState = await getMaintenanceState(env.DB);
+    if (maintenanceState.enabled === true) {
+      return {
+        ok: false,
+        status: 503,
+        code: "maintenance_mode",
+        error: normalizeText(maintenanceState.message) || "Maintenance mode is active.",
+        maintenanceState,
+      };
+    }
+  }
+
+  const row = await findLicense(env.DB, key);
+  if (!row) {
+    return {
+      ok: false,
+      status: 404,
+      code: "not_found",
+      error: "Key not found.",
+    };
+  }
+
+  if (row.status !== "active") {
+    return {
+      ok: false,
+      status: 403,
+      code: `status_${row.status}`,
+      error: `Key is ${row.status}.`,
+      row,
+    };
+  }
+
+  const windowResult = evaluateTimeWindow(row);
+  if (!windowResult.ok) {
+    return {
+      ok: false,
+      status: 403,
+      code: windowResult.code,
+      error: windowResult.error,
+      row,
+    };
+  }
+
+  const gameResult = evaluateGameAccess(row, placeId, gameId);
+  if (!gameResult.ok) {
+    return {
+      ok: false,
+      status: 403,
+      code: gameResult.code,
+      error: gameResult.error,
+      row,
+    };
+  }
+
+  const boundUserId = normalizeText(row.bound_user_id);
+  const boundDeviceId = normalizeText(row.bound_device_id);
+
+  if (options.allowBind === true) {
+    if (boundUserId && boundUserId !== userId) {
+      return {
+        ok: false,
+        status: 403,
+        code: "user_mismatch",
+        error: "Key is bound to another user.",
+        row,
+      };
+    }
+
+    if (boundDeviceId && boundDeviceId !== deviceId) {
+      return {
+        ok: false,
+        status: 403,
+        code: "device_mismatch",
+        error: "Key is bound to another device.",
+        row,
+      };
+    }
+
+    return {
+      ok: true,
+      row,
+      finalUserId: boundUserId || userId,
+      finalDeviceId: boundDeviceId || deviceId,
+    };
+  }
+
+  if (boundUserId !== userId) {
+    return {
+      ok: false,
+      status: 403,
+      code: "user_mismatch",
+      error: "User mismatch.",
+      row,
+    };
+  }
+
+  if (boundDeviceId !== deviceId) {
+    return {
+      ok: false,
+      status: 403,
+      code: "device_mismatch",
+      error: "Device mismatch.",
+      row,
+    };
+  }
+
+  return {
+    ok: true,
+    row,
+    finalUserId: userId,
+    finalDeviceId: deviceId,
+  };
+}
+
+async function upsertSession(db, data) {
+  const now = nowIso();
+  const sessionId = normalizeText(data.sessionId) || generateRandomId(16);
+  const startedAt = normalizeText(data.startedAt) || now;
+
+  await db.prepare(
+    `INSERT INTO live_sessions
+      (
+        session_id,
+        license_key,
+        user_id,
+        device_id,
+        place_id,
+        game_id,
+        game_name,
+        job_id,
+        executor,
+        platform,
+        status,
+        started_at,
