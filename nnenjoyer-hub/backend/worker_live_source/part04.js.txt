@@ -1,0 +1,303 @@
+lStorage.getItem(storageKey) || "";
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function getToken() {
+      return tokenInput.value.trim();
+    }
+
+    async function api(path, options = {}) {
+      const token = getToken();
+      if (!token) {
+        throw new Error("ADMIN_TOKEN is required.");
+      }
+
+      const response = await fetch(path, {
+        method: options.method || "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + token,
+        },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || payload.message || ("HTTP " + response.status));
+      }
+
+      return payload;
+    }
+
+    function formatTime(value) {
+      if (!value) return "Never";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    function formatRemaining(seconds) {
+      if (seconds === null || seconds === undefined) return "No expiry";
+      if (seconds <= 0) return "Expired";
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      if (days > 0) return days + "d " + hours + "h";
+      if (hours > 0) return hours + "h " + minutes + "m";
+      return minutes + "m";
+    }
+
+    function statusPill(status, online) {
+      if (online === true) return '<span class="pill ok">Online</span>';
+      if (status === "revoked") return '<span class="pill danger">Revoked</span>';
+      if (status === "active") return '<span class="pill ok">Active</span>';
+      return '<span class="pill warn">' + escapeHtml(status || "Unknown") + '</span>';
+    }
+
+    function makeButton(label, action, data, className = "") {
+      return '<button class="' + className + '" data-action="' + action + '" data-payload="' + escapeHtml(JSON.stringify(data)) + '">' + escapeHtml(label) + '</button>';
+    }
+
+    function renderOnline(rows) {
+      if (!rows.length) {
+        onlineWrap.innerHTML = '<div class="empty">Nobody is online right now.</div>';
+        return;
+      }
+
+      const html = ['<table><thead><tr><th>User</th><th>Game</th><th>Session</th><th>Seen</th><th>Actions</th></tr></thead><tbody>'];
+      for (const row of rows) {
+        html.push('<tr>');
+        html.push('<td><code>' + escapeHtml(row.userId) + '</code><br>' + statusPill(row.status, row.online) + '</td>');
+        html.push('<td>' + escapeHtml(row.gameName || row.placeId || "Unknown") + '<br><span class="pill">' + escapeHtml(row.executor || "Unknown") + '</span></td>');
+        html.push('<td><code>' + escapeHtml(row.sessionId) + '</code><br><span style="color:#9aa7cc;">' + escapeHtml(row.jobId || "No job id") + '</span></td>');
+        html.push('<td>' + escapeHtml(formatTime(row.lastSeenAt)) + '</td>');
+        html.push('<td><div class="actions">' +
+          makeButton("Terminate", "terminate-session", { sessionId: row.sessionId }, "danger") +
+          makeButton("Reauth", "reauth-session", { sessionId: row.sessionId }, "warn") +
+          '</div></td>');
+        html.push('</tr>');
+      }
+      html.push('</tbody></table>');
+      onlineWrap.innerHTML = html.join("");
+    }
+
+    function renderLicenses(rows) {
+      if (!rows.length) {
+        licensesWrap.innerHTML = '<div class="empty">No licenses found.</div>';
+        return;
+      }
+
+      const html = ['<table><thead><tr><th>Key</th><th>Owner</th><th>State</th><th>Time</th><th>Actions</th></tr></thead><tbody>'];
+      for (const row of rows) {
+        html.push('<tr>');
+        html.push('<td><code>' + escapeHtml(row.key) + '</code><br><span class="pill">' + escapeHtml(row.tier) + '</span></td>');
+        html.push('<td><code>' + escapeHtml(row.boundUserId || "Unbound") + '</code><br><span style="color:#9aa7cc;">' + escapeHtml(row.boundDeviceId || "No HWID") + '</span></td>');
+        html.push('<td>' + statusPill(row.status, row.isOnline) + '<br><span style="color:#9aa7cc;">Online sessions: ' + escapeHtml(row.onlineSessionCount) + '</span></td>');
+        html.push('<td>Expires: ' + escapeHtml(formatTime(row.expiresAt)) + '<br><span style="color:#9aa7cc;">' + escapeHtml(formatRemaining(row.remainingSeconds)) + '</span></td>');
+        html.push('<td><div class="actions">' +
+          makeButton("+1h", "extend", { key: row.key, extendSeconds: 3600 }) +
+          makeButton("+24h", "extend", { key: row.key, extendSeconds: 86400 }) +
+          makeButton("Reset HWID", "reset-device", { key: row.key, resetDevice: true }, "warn") +
+          makeButton("Reset User", "reset-user", { key: row.key, resetUser: true }, "warn") +
+          makeButton("Reset All", "reset-all", { key: row.key, resetUser: true, resetDevice: true, clearRedeemed: true, clearExpires: true }, "warn") +
+          makeButton("Reauth", "reauth-key", { key: row.key }, "warn") +
+          makeButton("Terminate", "terminate-key", { key: row.key }, "danger") +
+          makeButton("Revoke", "revoke", { key: row.key }, "danger") +
+          '</div></td>');
+        html.push('</tr>');
+      }
+      html.push('</tbody></table>');
+      licensesWrap.innerHTML = html.join("");
+    }
+
+    function renderUsers(rows) {
+      if (!rows.length) {
+        usersWrap.innerHTML = '<div class="empty">No users found.</div>';
+        return;
+      }
+
+      const html = ['<table><thead><tr><th>User</th><th>Keys</th><th>Online</th><th>Last Seen</th></tr></thead><tbody>'];
+      for (const row of rows) {
+        html.push('<tr>');
+        html.push('<td><code>' + escapeHtml(row.userId) + '</code><br><span style="color:#9aa7cc;">' + escapeHtml((row.tiers || []).join(", ") || "No tiers") + '</span></td>');
+        html.push('<td>' + escapeHtml(row.keyCount) + ' total<br><span style="color:#9aa7cc;">' + escapeHtml(row.activeKeyCount) + ' active</span></td>');
+        html.push('<td>' + escapeHtml(row.onlineSessionCount) + '</td>');
+        html.push('<td>' + escapeHtml(formatTime(row.lastSeenAt || row.lastValidatedAt)) + '</td>');
+        html.push('</tr>');
+      }
+      html.push('</tbody></table>');
+      usersWrap.innerHTML = html.join("");
+    }
+
+    async function refreshAll() {
+      setStatus("Refreshing data...");
+      try {
+        const [maintenance, online, users, licenses] = await Promise.all([
+          api("/admin/maintenance"),
+          api("/admin/online"),
+          api("/admin/users"),
+          api("/admin/licenses"),
+        ]);
+
+        maintenanceEnabledInput.checked = maintenance.maintenance && maintenance.maintenance.enabled === true;
+        maintenanceMessageInput.value = maintenance.maintenance ? (maintenance.maintenance.message || "") : "";
+
+        renderOnline(online.online || []);
+        renderUsers(users.users || []);
+        renderLicenses(licenses.licenses || []);
+        setStatus("Last refresh: " + new Date().toLocaleTimeString());
+      } catch (error) {
+        setStatus(error.message || String(error));
+      }
+    }
+
+    async function handleAction(action, payload) {
+      const routes = {
+        "terminate-session": ["/admin/session-command", { command: "terminate", sessionId: payload.sessionId, onlyOnline: false, message: "Session terminated by admin." }],
+        "reauth-session": ["/admin/session-command", { command: "reauth", sessionId: payload.sessionId, onlyOnline: false, message: "Session requires re-verification." }],
+        "terminate-key": ["/admin/session-command", { command: "terminate", key: payload.key, message: "Session terminated by admin." }],
+        "reauth-key": ["/admin/session-command", { command: "reauth", key: payload.key, message: "Session requires re-verification." }],
+        "revoke": ["/revoke", payload],
+        "extend": ["/admin/extend", payload],
+        "reset-device": ["/admin/reset-bind", payload],
+        "reset-user": ["/admin/reset-bind", payload],
+        "reset-all": ["/admin/reset-bind", payload],
+      };
+
+      const route = routes[action];
+      if (!route) return;
+
+      setStatus("Running action...");
+      try {
+        await api(route[0], { method: "POST", body: route[1] });
+        await refreshAll();
+      } catch (error) {
+        setStatus(error.message || String(error));
+      }
+    }
+
+    document.getElementById("saveToken").addEventListener("click", () => {
+      localStorage.setItem(storageKey, getToken());
+      setStatus("ADMIN_TOKEN saved locally in this browser.");
+    });
+
+    document.getElementById("refresh").addEventListener("click", refreshAll);
+
+    document.getElementById("applyMaintenance").addEventListener("click", async () => {
+      try {
+        await api("/admin/maintenance", {
+          method: "POST",
+          body: {
+            enabled: maintenanceEnabledInput.checked,
+            message: maintenanceMessageInput.value,
+          },
+        });
+        await refreshAll();
+      } catch (error) {
+        setStatus(error.message || String(error));
+      }
+    });
+
+    document.body.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-action]");
+      if (!button) return;
+      const action = button.dataset.action;
+      const payload = JSON.parse(button.dataset.payload || "{}");
+      handleAction(action, payload);
+    });
+  </script>
+</body>
+</html>`, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (request.method === "GET" && url.pathname === "/health") {
+      return json({ ok: true, service: "license-backend" });
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/panel") {
+      return renderAdminPanel();
+    }
+
+    if (request.method === "POST" && url.pathname === "/issue") {
+      return issueKey(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/redeem") {
+      return redeemKey(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/validate") {
+      return validateKey(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/session/start") {
+      return startSession(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/session/heartbeat") {
+      return heartbeatSession(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/session/stop") {
+      return stopSessionRoute(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/revoke") {
+      return revokeKey(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/extend") {
+      return extendKey(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/reset-bind") {
+      return resetBind(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/session-command") {
+      return setSessionCommand(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/maintenance") {
+      return getMaintenance(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/maintenance") {
+      return setMaintenance(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/licenses") {
+      return listLicenses(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/users") {
+      return listUsers(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/online") {
+      return listOnlineSessions(request, env);
+    }
+
+    return json({ ok: false, error: "Not found." }, 404);
+  },
+};
