@@ -4,7 +4,7 @@ return function(context)
     local function mustReplace(haystack, oldChunk, newChunk)
         local startIndex, endIndex = haystack:find(oldChunk, 1, true)
         if not startIndex then
-            error("Ultra Power patch failed: " .. oldChunk:match("^[^\n]+") or "unknown chunk")
+            error(("Ultra Power patch failed: %s"):format(oldChunk:match("^[^\n]+") or "unknown chunk"))
         end
 
         return haystack:sub(1, startIndex - 1) .. newChunk .. haystack:sub(endIndex + 1)
@@ -124,6 +124,149 @@ return function(context)
 ]])
 
     source = mustReplace(source, [[
+    local function toggleWindowVisibility()
+        if not trackedWindowFrame or not trackedWindowGui or not trackedWindowFrame.Parent or not trackedWindowGui.Parent then
+            local foundWindow = captureWindowReferences()
+            if not foundWindow then
+                return false
+            end
+        end
+
+        if trackedWindowAnimating then
+            return false
+        end
+
+        local shouldShow = trackedWindowGui.Enabled == false
+        trackedWindowVisible = trackedWindowGui.Enabled ~= false
+        return tweenWindowVisibility(shouldShow)
+    end
+]], [[
+    local function toggleWindowVisibility()
+        local function countWindowMarkerTexts(root)
+            if not root then
+                return 0
+            end
+
+            local wantedTexts = {
+                Main = true,
+                Targeting = true,
+                Tycoon = true,
+                Settings = true
+            }
+
+            local foundTexts = {}
+            local count = 0
+
+            for _, descendant in ipairs(root:GetDescendants()) do
+                if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+                    local text = tostring(descendant.Text or "")
+                    if wantedTexts[text] and not foundTexts[text] then
+                        foundTexts[text] = true
+                        count += 1
+                    end
+                end
+            end
+
+            return count
+        end
+
+        local function findLargestWindowFrame(root)
+            if not root then
+                return nil
+            end
+
+            local bestFrame = nil
+            local bestArea = 0
+
+            for _, descendant in ipairs(root:GetDescendants()) do
+                if descendant:IsA("GuiObject") then
+                    local absoluteSize = descendant.AbsoluteSize
+                    local area = absoluteSize.X * absoluteSize.Y
+                    if absoluteSize.X >= 360 and absoluteSize.Y >= 240 and area > bestArea then
+                        bestArea = area
+                        bestFrame = descendant
+                    end
+                end
+            end
+
+            return bestFrame
+        end
+
+        local function findWindowFallbackCandidate(root)
+            if not root then
+                return nil, nil
+            end
+
+            local bestGui = nil
+            local bestFrame = nil
+            local bestScore = -1
+            local bestArea = -1
+            local candidates = {}
+
+            if root:IsA("ScreenGui") then
+                table.insert(candidates, root)
+            end
+
+            for _, child in ipairs(root:GetChildren()) do
+                if child:IsA("ScreenGui") and child.Name ~= "NNEnjoyerBindCapture" then
+                    table.insert(candidates, child)
+                end
+            end
+
+            for _, screenGui in ipairs(candidates) do
+                local markerScore = countWindowMarkerTexts(screenGui)
+                if markerScore > 0 then
+                    local candidateFrame = findLargestWindowFrame(screenGui)
+                    local candidateArea = 0
+                    if candidateFrame then
+                        candidateArea = candidateFrame.AbsoluteSize.X * candidateFrame.AbsoluteSize.Y
+                    end
+
+                    if markerScore > bestScore or (markerScore == bestScore and candidateArea > bestArea) then
+                        bestScore = markerScore
+                        bestArea = candidateArea
+                        bestGui = screenGui
+                        bestFrame = candidateFrame
+                    end
+                end
+            end
+
+            return bestGui, bestFrame
+        end
+
+        if not trackedWindowFrame or not trackedWindowGui or not trackedWindowFrame.Parent or not trackedWindowGui.Parent then
+            local foundWindow = captureWindowReferences()
+            if not foundWindow then
+                local fallbackGui, fallbackFrame = findWindowFallbackCandidate(getGuiRoot())
+                if not fallbackGui then
+                    return false
+                end
+
+                trackedWindowGui = fallbackGui
+                trackedWindowFrame = fallbackFrame
+                trackedWindowScale = nil
+                trackedWindowShownPosition = fallbackFrame and fallbackFrame.Position or nil
+            end
+        end
+
+        if trackedWindowAnimating then
+            trackedWindowAnimating = false
+        end
+
+        if not trackedWindowFrame or not trackedWindowScale then
+            local shouldShow = trackedWindowGui.Enabled == false
+            trackedWindowGui.Enabled = shouldShow
+            trackedWindowVisible = shouldShow
+            return true
+        end
+
+        local shouldShow = trackedWindowGui.Enabled == false
+        trackedWindowVisible = trackedWindowGui.Enabled ~= false
+        return tweenWindowVisibility(shouldShow)
+    end
+]])
+
+    source = mustReplace(source, [[
     minimizeKeybindControl = tabs.Settings:AddKeybind("MinimizeKeybind", {
         Title = "Minimize Bind",
         Mode = "Toggle",
@@ -180,7 +323,7 @@ return function(context)
             task.spawn(function()
                 local toggled = toggleWindowVisibility()
                 if not toggled then
-                    notify("Minimize Bind", "The interface is busy right now. Try again in a moment.")
+                    notify("Minimize Bind", "The interface could not be found right now.")
                 end
             end)
             return
