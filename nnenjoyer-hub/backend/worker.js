@@ -38,6 +38,11 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+const DEFAULT_SUPPORTED_PLACE_IDS = [
+  "8146731988",
+  "70845479499574",
+];
+
 function toPositiveInteger(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -253,9 +258,10 @@ async function issueKey(request, env) {
   const scriptUrl = body.scriptUrl === null || body.scriptUrl === undefined || body.scriptUrl === ""
     ? null
     : normalizeUrl(body.scriptUrl);
-  const allowedPlaceIds = normalizeIdList(
+  const requestedPlaceIds = normalizeIdList(
     body.allowedPlaceIds ?? body.placeIds ?? body.placeId
   );
+  const allowedPlaceIds = requestedPlaceIds || DEFAULT_SUPPORTED_PLACE_IDS.slice();
   const allowedGameIds = normalizeIdList(
     body.allowedGameIds ?? body.gameIds ?? body.gameId
   );
