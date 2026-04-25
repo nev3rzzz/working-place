@@ -1371,9 +1371,132 @@ return function(context)
         end)
     end
 
+    local function findHotbarSlots()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not playerGui then
+            return nil
+        end
+
+        local backpackGui = playerGui:FindFirstChild("Backpack")
+        if not backpackGui then
+            return nil
+        end
+
+        local hotbarFrame = backpackGui:FindFirstChild("Hotbar", true)
+        if not hotbarFrame then
+            return nil
+        end
+
+        local slotsContainer = hotbarFrame:FindFirstChild("SlotFrame")
+            or hotbarFrame:FindFirstChild("Slots")
+            or hotbarFrame
+
+        local slots = {}
+        for _, child in ipairs(slotsContainer:GetDescendants()) do
+            if child:IsA("Frame") or child:IsA("ImageButton") or child:IsA("TextButton") then
+                local nameMatchesSlot = string.find(child.Name:lower(), "slot")
+                if nameMatchesSlot then
+                    table.insert(slots, child)
+                end
+            end
+        end
+
+        if #slots == 0 then
+            return nil
+        end
+
+        table.sort(slots, function(a, b)
+            return a.AbsolutePosition.X < b.AbsolutePosition.X
+        end)
+
+        return slots
+    end
+
+    local function getToolFromHotbarSlot(slot)
+        for _, descendant in ipairs(slot:GetDescendants()) do
+            if descendant:IsA("ObjectValue") and descendant.Value and descendant.Value:IsA("Tool") then
+                return descendant.Value
+            end
+        end
+
+        for _, descendant in ipairs(slot:GetDescendants()) do
+            if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+                local toolName = descendant.Text
+                if toolName and toolName ~= "" and not tonumber(toolName) and #toolName > 1 then
+                    local backpack = getBackpack()
+                    local character = getCharacter()
+
+                    if backpack then
+                        local tool = backpack:FindFirstChild(toolName)
+                        if tool and tool:IsA("Tool") then
+                            return tool
+                        end
+                    end
+
+                    if character then
+                        local tool = character:FindFirstChild(toolName)
+                        if tool and tool:IsA("Tool") then
+                            return tool
+                        end
+                    end
+                end
+            end
+        end
+
+        return nil
+    end
+
+    local function getToolsInHotbarOrder()
+        local slots = findHotbarSlots()
+        if not slots then
+            return nil
+        end
+
+        local orderedTools = {}
+        local seenTools = {}
+
+        for _, slot in ipairs(slots) do
+            local tool = getToolFromHotbarSlot(slot)
+            if tool and not seenTools[tool] then
+                seenTools[tool] = true
+                table.insert(orderedTools, tool)
+            end
+        end
+
+        if #orderedTools == 0 then
+            return nil
+        end
+
+        return orderedTools, seenTools
+    end
+
     local function getAllOwnedTools()
         local character = getCharacter()
         local backpack = getBackpack()
+
+        local hotbarOrdered, seenInHotbar = getToolsInHotbarOrder()
+        if hotbarOrdered then
+            if backpack then
+                for _, tool in ipairs(backpack:GetChildren()) do
+                    if tool:IsA("Tool") and not seenInHotbar[tool] then
+                        seenInHotbar[tool] = true
+                        table.insert(hotbarOrdered, tool)
+                    end
+                end
+            end
+
+            if character then
+                for _, tool in ipairs(character:GetChildren()) do
+                    if tool:IsA("Tool") and not seenInHotbar[tool] then
+                        seenInHotbar[tool] = true
+                        table.insert(hotbarOrdered, tool)
+                    end
+                end
+            end
+
+            return hotbarOrdered, character, backpack
+        end
+
         local tools = {}
         local count = 0
 
@@ -1394,10 +1517,6 @@ return function(context)
                 end
             end
         end
-
-        table.sort(tools, function(a, b)
-            return a.Name < b.Name
-        end)
 
         return tools, character, backpack
     end
