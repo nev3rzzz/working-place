@@ -810,6 +810,41 @@ return function(context)
         return tweenWindowVisibility(shouldShow)
     end
 
+    local function bruteForceToggleFluentGuis()
+        local root = getGuiParent()
+        if not root then
+            return false, "no gui parent"
+        end
+
+        local toggled = 0
+        local anyEnabled = false
+
+        for _, child in ipairs(root:GetChildren()) do
+            if child:IsA("ScreenGui") and child.Name ~= "NNEnjoyerBindCapture" then
+                local markerScore = countWindowMarkerTexts(child)
+                if markerScore > 0 then
+                    if child.Enabled then
+                        anyEnabled = true
+                    end
+                end
+            end
+        end
+
+        local newState = not anyEnabled
+
+        for _, child in ipairs(root:GetChildren()) do
+            if child:IsA("ScreenGui") and child.Name ~= "NNEnjoyerBindCapture" then
+                local markerScore = countWindowMarkerTexts(child)
+                if markerScore > 0 then
+                    child.Enabled = newState
+                    toggled += 1
+                end
+            end
+        end
+
+        return toggled > 0, "toggled " .. tostring(toggled) .. " gui(s) to " .. tostring(newState)
+    end
+
     local function performMinimizeToggle()
         local now = os.clock()
         if now - lastMinimizeToggleTime < 0.25 then
@@ -818,7 +853,15 @@ return function(context)
 
         lastMinimizeToggleTime = now
         task.spawn(function()
-            toggleWindowVisibility()
+            local success, errorMessage = pcall(toggleWindowVisibility)
+            if not success then
+                notify("Minimize", "Smooth toggle failed: " .. tostring(errorMessage))
+            end
+
+            local ok, info = bruteForceToggleFluentGuis()
+            if not ok then
+                notify("Minimize", "Could not find Fluent window. " .. tostring(info))
+            end
         end)
     end
 
@@ -856,6 +899,7 @@ return function(context)
 
             local isDown = UserInputService:IsKeyDown(currentKeyCode)
             if isDown and not minimizeKeyWasDown then
+                notify("Minimize", "Key detected: " .. tostring(currentKeyCode.Name))
                 performMinimizeToggle()
             end
             minimizeKeyWasDown = isDown
