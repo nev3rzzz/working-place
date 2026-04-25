@@ -40,7 +40,7 @@ return function(context)
     local tabs = {
         Movement = window:AddTab({
             Title = "Movement",
-            Icon = "zap"
+            Icon = "move"
         }),
         Tools = window:AddTab({
             Title = "Tools",
@@ -694,16 +694,22 @@ return function(context)
             trackedWindowGui.Enabled = true
             trackedWindowFrame.Visible = true
             trackedWindowVisible = true
-            trackedWindowScale.Scale = 0.92
-            trackedWindowFrame.Position = trackedWindowShownPosition + UDim2.fromOffset(0, 24)
 
-            local scaleTween = TweenService:Create(trackedWindowScale, TweenInfo.new(0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-                Scale = 1
-            })
+            trackedWindowScale.Scale = 0.86
+            trackedWindowFrame.Position = trackedWindowShownPosition + UDim2.fromOffset(0, 36)
 
-            local positionTween = TweenService:Create(trackedWindowFrame, TweenInfo.new(0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-                Position = trackedWindowShownPosition
-            })
+            local showDuration = 0.42
+            local scaleTween = TweenService:Create(
+                trackedWindowScale,
+                TweenInfo.new(showDuration, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 0, false, 0),
+                { Scale = 1 }
+            )
+
+            local positionTween = TweenService:Create(
+                trackedWindowFrame,
+                TweenInfo.new(showDuration, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+                { Position = trackedWindowShownPosition }
+            )
 
             local finished = false
             positionTween.Completed:Connect(function()
@@ -712,7 +718,7 @@ return function(context)
                 trackedWindowAnimationStartedAt = 0
             end)
 
-            task.delay(0.45, function()
+            task.delay(showDuration + 0.1, function()
                 if not finished then
                     trackedWindowAnimating = false
                     trackedWindowAnimationStartedAt = 0
@@ -726,13 +732,18 @@ return function(context)
 
         trackedWindowShownPosition = trackedWindowFrame.Position
 
-        local scaleTween = TweenService:Create(trackedWindowScale, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
-            Scale = 0.93
-        })
+        local hideDuration = 0.26
+        local scaleTween = TweenService:Create(
+            trackedWindowScale,
+            TweenInfo.new(hideDuration, Enum.EasingStyle.Quart, Enum.EasingDirection.In),
+            { Scale = 0.88 }
+        )
 
-        local positionTween = TweenService:Create(trackedWindowFrame, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
-            Position = trackedWindowShownPosition + UDim2.fromOffset(0, 24)
-        })
+        local positionTween = TweenService:Create(
+            trackedWindowFrame,
+            TweenInfo.new(hideDuration, Enum.EasingStyle.Quart, Enum.EasingDirection.In),
+            { Position = trackedWindowShownPosition + UDim2.fromOffset(0, 28) }
+        )
 
         local finished = false
         positionTween.Completed:Connect(function()
@@ -746,7 +757,7 @@ return function(context)
             trackedWindowAnimationStartedAt = 0
         end)
 
-        task.delay(0.4, function()
+        task.delay(hideDuration + 0.1, function()
             if not finished then
                 trackedWindowVisible = false
                 trackedWindowGui.Enabled = false
@@ -1047,14 +1058,60 @@ return function(context)
             local dragStartInputPosition = nil
             local dragStartWindowPosition = nil
             local targetWindowPosition = windowFrame.Position
+            local lastTargetPosition = windowFrame.Position
+            local velocityX = 0
+            local velocityY = 0
+            local settling = false
 
-              smoothWindowConnection = RunService.RenderStepped:Connect(function(deltaTime)
-                  if dragging then
-                      local alpha = 1 - math.exp(-deltaTime * 18)
-                      windowFrame.Position = lerpUDim2(windowFrame.Position, targetWindowPosition, alpha)
-                      trackedWindowShownPosition = windowFrame.Position
-                  end
-              end)
+            smoothWindowConnection = RunService.RenderStepped:Connect(function(deltaTime)
+                if dragging then
+                    local alpha = 1 - math.exp(-deltaTime * 22)
+                    local previousPosition = windowFrame.Position
+                    local newPosition = lerpUDim2(previousPosition, targetWindowPosition, alpha)
+                    windowFrame.Position = newPosition
+                    trackedWindowShownPosition = newPosition
+
+                    if deltaTime > 0 then
+                        velocityX = (targetWindowPosition.X.Offset - lastTargetPosition.X.Offset) / deltaTime
+                        velocityY = (targetWindowPosition.Y.Offset - lastTargetPosition.Y.Offset) / deltaTime
+                    end
+                    lastTargetPosition = targetWindowPosition
+                elseif settling then
+                    local previousPosition = windowFrame.Position
+
+                    local inertiaDecay = math.exp(-deltaTime * 6)
+                    local addedX = velocityX * deltaTime * 0.18
+                    local addedY = velocityY * deltaTime * 0.18
+
+                    local intermediateTarget = UDim2.new(
+                        targetWindowPosition.X.Scale,
+                        targetWindowPosition.X.Offset + addedX,
+                        targetWindowPosition.Y.Scale,
+                        targetWindowPosition.Y.Offset + addedY
+                    )
+
+                    targetWindowPosition = intermediateTarget
+                    velocityX = velocityX * inertiaDecay
+                    velocityY = velocityY * inertiaDecay
+
+                    local alpha = 1 - math.exp(-deltaTime * 14)
+                    local newPosition = lerpUDim2(previousPosition, targetWindowPosition, alpha)
+                    windowFrame.Position = newPosition
+                    trackedWindowShownPosition = newPosition
+
+                    if math.abs(velocityX) < 1 and math.abs(velocityY) < 1 then
+                        local distanceX = math.abs(newPosition.X.Offset - targetWindowPosition.X.Offset)
+                        local distanceY = math.abs(newPosition.Y.Offset - targetWindowPosition.Y.Offset)
+                        if distanceX < 0.5 and distanceY < 0.5 then
+                            windowFrame.Position = targetWindowPosition
+                            trackedWindowShownPosition = targetWindowPosition
+                            settling = false
+                            velocityX = 0
+                            velocityY = 0
+                        end
+                    end
+                end
+            end)
 
             dragHandle.InputBegan:Connect(function(input)
                 if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
@@ -1067,10 +1124,14 @@ return function(context)
                 end
 
                 dragging = true
+                settling = false
                 activeDragInput = input
                 dragStartInputPosition = input.Position
                 dragStartWindowPosition = windowFrame.Position
                 targetWindowPosition = windowFrame.Position
+                lastTargetPosition = windowFrame.Position
+                velocityX = 0
+                velocityY = 0
             end)
 
             smoothWindowInputConnection = UserInputService.InputChanged:Connect(function(input)
@@ -1093,6 +1154,7 @@ return function(context)
                     activeDragInput = nil
                     dragStartInputPosition = nil
                     dragStartWindowPosition = nil
+                    settling = true
                     trackedWindowShownPosition = windowFrame.Position
                 end
             end)
@@ -1332,6 +1394,10 @@ return function(context)
                 end
             end
         end
+
+        table.sort(tools, function(a, b)
+            return a.Name < b.Name
+        end)
 
         return tools, character, backpack
     end
