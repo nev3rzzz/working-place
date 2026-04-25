@@ -810,39 +810,126 @@ return function(context)
         return tweenWindowVisibility(shouldShow)
     end
 
-    local function bruteForceToggleFluentGuis()
-        local root = getGuiParent()
-        if not root then
-            return false, "no gui parent"
+    local function tryFluentNativeMinimize()
+        if not window then
+            return false, "no window object"
         end
 
-        local toggled = 0
-        local anyEnabled = false
+        local methods = {"Minimize", "ToggleMinimize", "Toggle"}
+        for _, methodName in ipairs(methods) do
+            if type(window[methodName]) == "function" then
+                local ok, err = pcall(function()
+                    window[methodName](window)
+                end)
+                if ok then
+                    return true, "called window:" .. methodName .. "()"
+                end
+            end
+        end
 
-        for _, child in ipairs(root:GetChildren()) do
-            if child:IsA("ScreenGui") and child.Name ~= "NNEnjoyerBindCapture" then
-                local markerScore = countWindowMarkerTexts(child)
-                if markerScore > 0 then
-                    if child.Enabled then
-                        anyEnabled = true
+        if window.Minimized ~= nil then
+            local ok, err = pcall(function()
+                window.Minimized = not window.Minimized
+            end)
+            if ok then
+                return true, "set window.Minimized"
+            end
+        end
+
+        if Fluent then
+            for _, methodName in ipairs({"Minimize", "ToggleMinimize"}) do
+                if type(Fluent[methodName]) == "function" then
+                    local ok = pcall(function()
+                        Fluent[methodName](Fluent, window)
+                    end)
+                    if ok then
+                        return true, "called Fluent:" .. methodName .. "()"
                     end
                 end
             end
         end
 
-        local newState = not anyEnabled
+        return false, "no native minimize method found"
+    end
 
-        for _, child in ipairs(root:GetChildren()) do
-            if child:IsA("ScreenGui") and child.Name ~= "NNEnjoyerBindCapture" then
-                local markerScore = countWindowMarkerTexts(child)
-                if markerScore > 0 then
-                    child.Enabled = newState
-                    toggled += 1
+    local function collectAllGuiSources()
+        local sources = {}
+        local seen = {}
+
+        local function addSource(container)
+            if container and not seen[container] then
+                seen[container] = true
+                table.insert(sources, container)
+            end
+        end
+
+        pcall(function()
+            if gethui then
+                addSource(gethui())
+            end
+        end)
+
+        pcall(function()
+            addSource(CoreGui)
+        end)
+
+        pcall(function()
+            addSource(game:GetService("CoreGui"))
+        end)
+
+        pcall(function()
+            local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            addSource(playerGui)
+        end)
+
+        pcall(function()
+            addSource(game:GetService("StarterGui"))
+        end)
+
+        return sources
+    end
+
+    local function bruteForceToggleFluentGuis()
+        local sources = collectAllGuiSources()
+        local matchingGuis = {}
+        local anyEnabled = false
+
+        for _, source in ipairs(sources) do
+            local descendants
+            local ok = pcall(function()
+                descendants = source:GetDescendants()
+            end)
+
+            if ok and descendants then
+                for _, descendant in ipairs(descendants) do
+                    if descendant:IsA("ScreenGui") and descendant.Name ~= "NNEnjoyerBindCapture" then
+                        local markerScore = countWindowMarkerTexts(descendant)
+                        if markerScore >= 2 then
+                            if not table.find(matchingGuis, descendant) then
+                                table.insert(matchingGuis, descendant)
+                                if descendant.Enabled then
+                                    anyEnabled = true
+                                end
+                            end
+                        end
+                    end
                 end
             end
         end
 
-        return toggled > 0, "toggled " .. tostring(toggled) .. " gui(s) to " .. tostring(newState)
+        if #matchingGuis == 0 then
+            return false, "0 fluent guis found across " .. tostring(#sources) .. " sources"
+        end
+
+        local newState = not anyEnabled
+
+        for _, guiObject in ipairs(matchingGuis) do
+            pcall(function()
+                guiObject.Enabled = newState
+            end)
+        end
+
+        return true, "toggled " .. tostring(#matchingGuis) .. " gui(s) to " .. tostring(newState)
     end
 
     local function performMinimizeToggle()
@@ -853,14 +940,16 @@ return function(context)
 
         lastMinimizeToggleTime = now
         task.spawn(function()
-            local success, errorMessage = pcall(toggleWindowVisibility)
-            if not success then
-                notify("Minimize", "Smooth toggle failed: " .. tostring(errorMessage))
+            local nativeOk, nativeInfo = tryFluentNativeMinimize()
+            if nativeOk then
+                return
             end
 
-            local ok, info = bruteForceToggleFluentGuis()
-            if not ok then
-                notify("Minimize", "Could not find Fluent window. " .. tostring(info))
+            local smoothOk = pcall(toggleWindowVisibility)
+
+            local bruteOk, bruteInfo = bruteForceToggleFluentGuis()
+            if not bruteOk and not smoothOk then
+                notify("Minimize", "All methods failed. Native: " .. tostring(nativeInfo) .. ". Brute: " .. tostring(bruteInfo))
             end
         end)
     end
@@ -899,7 +988,6 @@ return function(context)
 
             local isDown = UserInputService:IsKeyDown(currentKeyCode)
             if isDown and not minimizeKeyWasDown then
-                notify("Minimize", "Key detected: " .. tostring(currentKeyCode.Name))
                 performMinimizeToggle()
             end
             minimizeKeyWasDown = isDown
