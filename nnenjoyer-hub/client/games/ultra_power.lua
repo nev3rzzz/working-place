@@ -85,7 +85,7 @@ combinedSource = mustReplace(
 combinedSource = mustReplace(
     combinedSource,
     [[        Content = "Minimize Bind: RightAlt"]],
-    [[        Content = "Minimize Bind: RightAlt / RightCtrl"]],
+    [[        Content = "Minimize Bind: RightCtrl"]],
     "settings minimize text"
 )
 
@@ -106,8 +106,7 @@ combinedSource = mustReplace(
             end)
             return
         end]],
-    [[        if input.UserInputType == Enum.UserInputType.Keyboard and
-            (input.KeyCode == Enum.KeyCode.RightAlt or input.KeyCode == Enum.KeyCode.RightControl) then
+    [[        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.RightControl then
             local now = os.clock()
             if now - lastMinimizeToggleTime < 0.15 then
                 return
