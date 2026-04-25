@@ -6,7 +6,6 @@ return function(context)
     local GuiService = game:GetService("GuiService")
     local TweenService = game:GetService("TweenService")
     local CoreGui = game:GetService("CoreGui")
-    local ContextActionService = game:GetService("ContextActionService")
 
     local LocalPlayer = context.LocalPlayer or Players.LocalPlayer
     local Runtime = context.Runtime
@@ -152,8 +151,8 @@ return function(context)
     local smoothWindowInputEndConnection = nil
     local customBindConnection = nil
     local lastMinimizeToggleTime = 0
-    local minimizeActionName = "NNEnjoyerMinimizeAction_" .. tostring(math.random(100000, 999999))
-    local minimizeActionBoundKey = nil
+    local minimizePollConnection = nil
+    local minimizeKeyWasDown = false
     local triggerMinimizeRebind = function() end
     local characterAddedConn = nil
     local characterRemovingConn = nil
@@ -813,7 +812,7 @@ return function(context)
 
     local function performMinimizeToggle()
         local now = os.clock()
-        if now - lastMinimizeToggleTime < 0.15 then
+        if now - lastMinimizeToggleTime < 0.25 then
             return
         end
 
@@ -824,12 +823,11 @@ return function(context)
     end
 
     local function unbindMinimizeAction()
-        if minimizeActionBoundKey then
-            pcall(function()
-                ContextActionService:UnbindAction(minimizeActionName)
-            end)
-            minimizeActionBoundKey = nil
+        if minimizePollConnection then
+            minimizePollConnection:Disconnect()
+            minimizePollConnection = nil
         end
+        minimizeKeyWasDown = false
     end
 
     local function rebindMinimizeAction()
@@ -844,26 +842,24 @@ return function(context)
             return
         end
 
-        local handler = function(_, inputState)
-            if inputState == Enum.UserInputState.Begin then
+        minimizeKeyWasDown = UserInputService:IsKeyDown(keyCode)
+
+        minimizePollConnection = RunService.Heartbeat:Connect(function()
+            if not minimizeWindowBind or minimizeWindowBind.kind ~= "KeyCode" then
+                return
+            end
+
+            local currentKeyCode = Enum.KeyCode[minimizeWindowBind.code]
+            if not currentKeyCode then
+                return
+            end
+
+            local isDown = UserInputService:IsKeyDown(currentKeyCode)
+            if isDown and not minimizeKeyWasDown then
                 performMinimizeToggle()
             end
-            return Enum.ContextActionResult.Sink
-        end
-
-        local success = pcall(function()
-            ContextActionService:BindActionAtPriority(
-                minimizeActionName,
-                handler,
-                false,
-                Enum.ContextActionPriority.High.Value,
-                keyCode
-            )
+            minimizeKeyWasDown = isDown
         end)
-
-        if success then
-            minimizeActionBoundKey = keyCode
-        end
     end
 
     triggerMinimizeRebind = rebindMinimizeAction
