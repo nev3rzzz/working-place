@@ -6,6 +6,7 @@ return function(context)
     local GuiService = game:GetService("GuiService")
     local TweenService = game:GetService("TweenService")
     local CoreGui = game:GetService("CoreGui")
+    local ContextActionService = game:GetService("ContextActionService")
 
     local LocalPlayer = context.LocalPlayer or Players.LocalPlayer
     local Runtime = context.Runtime
@@ -129,7 +130,7 @@ return function(context)
     local lastMouseTargetY = nil
     local equipFirstToolsBind = nil
     local aimMouseToggleBind = nil
-    local minimizeWindowBind = { kind = "KeyCode", code = "RightControl" }
+    local minimizeWindowBind = nil
     local pendingBindAction = nil
     local bindCaptureGui = nil
     local bindCaptureFrame = nil
@@ -151,6 +152,9 @@ return function(context)
     local smoothWindowInputEndConnection = nil
     local customBindConnection = nil
     local lastMinimizeToggleTime = 0
+    local minimizeActionName = "NNEnjoyerMinimizeAction_" .. tostring(math.random(100000, 999999))
+    local minimizeActionBoundKey = nil
+    local triggerMinimizeRebind = function() end
     local characterAddedConn = nil
     local characterRemovingConn = nil
     local childAddedConn = nil
@@ -431,6 +435,7 @@ return function(context)
             aimMouseToggleBind = bind
         elseif actionName == "minimize" then
             minimizeWindowBind = bind
+            triggerMinimizeRebind()
         end
 
         updateBindParagraphs()
@@ -443,6 +448,7 @@ return function(context)
             aimMouseToggleBind = nil
         elseif actionName == "minimize" then
             minimizeWindowBind = nil
+            triggerMinimizeRebind()
         end
 
         updateBindParagraphs()
@@ -804,6 +810,63 @@ return function(context)
         trackedWindowVisible = trackedWindowGui.Enabled ~= false
         return tweenWindowVisibility(shouldShow)
     end
+
+    local function performMinimizeToggle()
+        local now = os.clock()
+        if now - lastMinimizeToggleTime < 0.15 then
+            return
+        end
+
+        lastMinimizeToggleTime = now
+        task.spawn(function()
+            toggleWindowVisibility()
+        end)
+    end
+
+    local function unbindMinimizeAction()
+        if minimizeActionBoundKey then
+            pcall(function()
+                ContextActionService:UnbindAction(minimizeActionName)
+            end)
+            minimizeActionBoundKey = nil
+        end
+    end
+
+    local function rebindMinimizeAction()
+        unbindMinimizeAction()
+
+        if not minimizeWindowBind or minimizeWindowBind.kind ~= "KeyCode" then
+            return
+        end
+
+        local keyCode = Enum.KeyCode[minimizeWindowBind.code]
+        if not keyCode then
+            return
+        end
+
+        local handler = function(_, inputState)
+            if inputState == Enum.UserInputState.Begin then
+                performMinimizeToggle()
+            end
+            return Enum.ContextActionResult.Sink
+        end
+
+        local success = pcall(function()
+            ContextActionService:BindActionAtPriority(
+                minimizeActionName,
+                handler,
+                false,
+                Enum.ContextActionPriority.High.Value,
+                keyCode
+            )
+        end)
+
+        if success then
+            minimizeActionBoundKey = keyCode
+        end
+    end
+
+    triggerMinimizeRebind = rebindMinimizeAction
 
     local function setupSmoothWindow()
         task.spawn(function()
@@ -2157,6 +2220,7 @@ return function(context)
         notificationsMuted = true
         pendingBindAction = nil
         destroyBindCapturePopup()
+        unbindMinimizeAction()
         setUseAllToolsOnClickEnabled(false)
         setLaserDoorsDisabled(false)
         setAutoCollectCashEnabled(false)
@@ -2265,19 +2329,6 @@ return function(context)
             assignBind(actionName, bind)
             destroyBindCapturePopup()
             notify("Bind Capture", "Bound to " .. bind.code)
-            return
-        end
-
-        if doesBindMatch(minimizeWindowBind, input) then
-            local now = os.clock()
-            if now - lastMinimizeToggleTime < 0.15 then
-                return
-            end
-
-            lastMinimizeToggleTime = now
-            task.spawn(function()
-                toggleWindowVisibility()
-            end)
             return
         end
 
