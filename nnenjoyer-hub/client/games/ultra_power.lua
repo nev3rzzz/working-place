@@ -1561,6 +1561,25 @@ return function(context)
         task.wait()
         task.wait()
 
+        local slots = findHotbarSlots()
+        local hotbarOrdered = getToolsInHotbarOrder()
+
+        if showNotification ~= false then
+            local diagSlots = slots and #slots or 0
+            local diagOrdered = hotbarOrdered and #hotbarOrdered or 0
+            local previewHotbar = {}
+            if hotbarOrdered then
+                for index = 1, math.min(diagOrdered, 5) do
+                    table.insert(previewHotbar, hotbarOrdered[index].Name)
+                end
+            end
+            notify(
+                "DEBUG Hotbar",
+                "slots=" .. tostring(diagSlots) .. " ordered=" .. tostring(diagOrdered) ..
+                    " names=" .. (#previewHotbar > 0 and table.concat(previewHotbar, ", ") or "(none)")
+            )
+        end
+
         local tools = getAllOwnedTools()
 
         local equipLimit = math.clamp(math.floor(equippedToolCount), 0, #tools)
