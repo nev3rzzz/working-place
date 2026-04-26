@@ -1531,7 +1531,9 @@ return function(context)
     end
 
     local function setEquippedToolsState(showNotification)
-        local tools, character, backpack = getAllOwnedTools()
+        local character = getCharacter()
+        local backpack = getBackpack()
+
         if not backpack then
             if showNotification ~= false then
                 notify("Equip Tools", "Backpack was not found.")
@@ -1539,32 +1541,53 @@ return function(context)
             return false, 0
         end
 
-        local equipLimit = math.clamp(math.floor(equippedToolCount), 0, #tools)
-        local equipped = 0
-        local unequipped = 0
-
-        for index = 1, #tools do
-            local tool = tools[index]
-            if index <= equipLimit then
-                if tool.Parent ~= character then
-                    tool.Parent = character
-                    equipped += 1
+        if character then
+            local toolsInCharacter = {}
+            for _, child in ipairs(character:GetChildren()) do
+                if child:IsA("Tool") then
+                    table.insert(toolsInCharacter, child)
                 end
-            elseif tool.Parent ~= backpack then
-                tool.Parent = backpack
-                unequipped += 1
             end
-        end
 
-        if equipLimit <= 0 then
+            for _, tool in ipairs(toolsInCharacter) do
+                pcall(function()
+                    tool.Parent = backpack
+                end)
+            end
+
             forceUnequipTools(character)
         end
 
+        task.wait()
+        task.wait()
+
+        local tools = getAllOwnedTools()
+
+        local equipLimit = math.clamp(math.floor(equippedToolCount), 0, #tools)
+        local equipped = 0
+
+        for index = 1, equipLimit do
+            local tool = tools[index]
+            if tool and tool.Parent ~= character then
+                pcall(function()
+                    tool.Parent = character
+                end)
+                equipped += 1
+            end
+        end
+
         if showNotification ~= false then
+            local previewNames = {}
+            for index = 1, math.min(equipLimit, 5) do
+                if tools[index] then
+                    table.insert(previewNames, tools[index].Name)
+                end
+            end
+
+            local previewText = #previewNames > 0 and table.concat(previewNames, ", ") or "(none)"
             notify(
                 "Equip Tools",
-                "Target equipped: " .. tostring(equipLimit) .. " | Equipped now: " .. tostring(equipped) ..
-                    " | Moved back: " .. tostring(unequipped)
+                "Equipped " .. tostring(equipped) .. "/" .. tostring(equipLimit) .. ": " .. previewText
             )
         end
 
