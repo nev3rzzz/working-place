@@ -1240,8 +1240,11 @@ return function(context)
     refreshCharacterCache(LocalPlayer.Character)
     refreshBackpackCache()
 
+    local triggerToolOrderTrackingSetup = function() end
+
     characterAddedConn = LocalPlayer.CharacterAdded:Connect(function(character)
         refreshCharacterCache(character)
+        task.defer(triggerToolOrderTrackingSetup)
     end)
 
     characterRemovingConn = LocalPlayer.CharacterRemoving:Connect(function(character)
@@ -1255,6 +1258,7 @@ return function(context)
     childAddedConn = LocalPlayer.ChildAdded:Connect(function(child)
         if child:IsA("Backpack") then
             currentBackpack = child
+            task.defer(triggerToolOrderTrackingSetup)
         end
     end)
 
@@ -1371,32 +1375,135 @@ return function(context)
         end)
     end
 
+    local toolOrderRegistry = {}
+    local toolOrderCounter = 0
+    local toolOrderConnections = {}
+
+    local function registerTool(tool)
+        if not tool or not tool:IsA("Tool") then
+            return
+        end
+
+        if toolOrderRegistry[tool] then
+            return
+        end
+
+        toolOrderCounter += 1
+        toolOrderRegistry[tool] = toolOrderCounter
+    end
+
+    local function unregisterTool(tool)
+        if tool then
+            toolOrderRegistry[tool] = nil
+        end
+    end
+
+    local function setupToolOrderTracking()
+        for _, conn in pairs(toolOrderConnections) do
+            pcall(function()
+                conn:Disconnect()
+            end)
+        end
+        toolOrderConnections = {}
+
+        local backpack = getBackpack()
+        if backpack then
+            for _, child in ipairs(backpack:GetChildren()) do
+                if child:IsA("Tool") then
+                    registerTool(child)
+                end
+            end
+
+            toolOrderConnections.backpackAdded = backpack.ChildAdded:Connect(function(child)
+                if child:IsA("Tool") then
+                    registerTool(child)
+                end
+            end)
+        end
+
+        local character = getCharacter()
+        if character then
+            for _, child in ipairs(character:GetChildren()) do
+                if child:IsA("Tool") then
+                    registerTool(child)
+                end
+            end
+
+            toolOrderConnections.characterAdded = character.ChildAdded:Connect(function(child)
+                if child:IsA("Tool") then
+                    registerTool(child)
+                end
+            end)
+        end
+    end
+
+    triggerToolOrderTrackingSetup = setupToolOrderTracking
+    setupToolOrderTracking()
+
+    local function searchHotbarInContainer(container)
+        if not container then
+            return nil
+        end
+
+        local descendants
+        local ok = pcall(function()
+            descendants = container:GetDescendants()
+        end)
+
+        if not ok or not descendants then
+            return nil
+        end
+
+        for _, descendant in ipairs(descendants) do
+            if descendant.Name == "Hotbar" and (descendant:IsA("Frame") or descendant:IsA("ScreenGui")) then
+                return descendant
+            end
+        end
+
+        return nil
+    end
+
     local function findHotbarSlots()
-        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-        if not playerGui then
-            return nil
+        local containers = {}
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if pg then table.insert(containers, pg) end
+        end)
+        pcall(function()
+            table.insert(containers, CoreGui)
+        end)
+        pcall(function()
+            if gethui then table.insert(containers, gethui()) end
+        end)
+
+        local hotbarFrame = nil
+        for _, container in ipairs(containers) do
+            hotbarFrame = searchHotbarInContainer(container)
+            if hotbarFrame then break end
         end
 
-        local backpackGui = playerGui:FindFirstChild("Backpack")
-        if not backpackGui then
-            return nil
-        end
-
-        local hotbarFrame = backpackGui:FindFirstChild("Hotbar", true)
         if not hotbarFrame then
             return nil
         end
 
-        local slotsContainer = hotbarFrame:FindFirstChild("SlotFrame")
-            or hotbarFrame:FindFirstChild("Slots")
-            or hotbarFrame
-
         local slots = {}
-        for _, child in ipairs(slotsContainer:GetDescendants()) do
-            if child:IsA("Frame") or child:IsA("ImageButton") or child:IsA("TextButton") then
-                local nameMatchesSlot = string.find(child.Name:lower(), "slot")
-                if nameMatchesSlot then
-                    table.insert(slots, child)
+
+        for _, descendant in ipairs(hotbarFrame:GetDescendants()) do
+            if descendant:IsA("Frame") or descendant:IsA("ImageButton") or descendant:IsA("TextButton") then
+                local nameLower = descendant.Name:lower()
+                local isSlot = string.find(nameLower, "slot")
+                local hasNumberSibling = false
+                for _, sub in ipairs(descendant:GetChildren()) do
+                    if (sub:IsA("TextLabel") or sub:IsA("TextButton")) and tonumber(sub.Text) then
+                        hasNumberSibling = true
+                        break
+                    end
+                end
+
+                if isSlot or hasNumberSibling then
+                    if descendant.AbsoluteSize.X > 30 and descendant.AbsoluteSize.Y > 30 then
+                        table.insert(slots, descendant)
+                    end
                 end
             end
         end
@@ -1498,13 +1605,12 @@ return function(context)
         end
 
         local tools = {}
-        local count = 0
 
         if backpack then
             for _, tool in ipairs(backpack:GetChildren()) do
                 if tool:IsA("Tool") then
-                    count += 1
-                    tools[count] = tool
+                    registerTool(tool)
+                    table.insert(tools, tool)
                 end
             end
         end
@@ -1512,11 +1618,17 @@ return function(context)
         if character then
             for _, tool in ipairs(character:GetChildren()) do
                 if tool:IsA("Tool") then
-                    count += 1
-                    tools[count] = tool
+                    registerTool(tool)
+                    table.insert(tools, tool)
                 end
             end
         end
+
+        table.sort(tools, function(a, b)
+            local orderA = toolOrderRegistry[a] or math.huge
+            local orderB = toolOrderRegistry[b] or math.huge
+            return orderA < orderB
+        end)
 
         return tools, character, backpack
     end
@@ -1567,6 +1679,7 @@ return function(context)
         if showNotification ~= false then
             local diagSlots = slots and #slots or 0
             local diagOrdered = hotbarOrdered and #hotbarOrdered or 0
+            local mode = hotbarOrdered and "HOTBAR" or "REGISTRY"
             local previewHotbar = {}
             if hotbarOrdered then
                 for index = 1, math.min(diagOrdered, 5) do
@@ -1575,7 +1688,7 @@ return function(context)
             end
             notify(
                 "DEBUG Hotbar",
-                "slots=" .. tostring(diagSlots) .. " ordered=" .. tostring(diagOrdered) ..
+                "mode=" .. mode .. " slots=" .. tostring(diagSlots) .. " ordered=" .. tostring(diagOrdered) ..
                     " names=" .. (#previewHotbar > 0 and table.concat(previewHotbar, ", ") or "(none)")
             )
         end
@@ -2576,6 +2689,14 @@ return function(context)
         pendingBindAction = nil
         destroyBindCapturePopup()
         unbindMinimizeAction()
+
+        for _, conn in pairs(toolOrderConnections) do
+            pcall(function()
+                conn:Disconnect()
+            end)
+        end
+        toolOrderConnections = {}
+
         setUseAllToolsOnClickEnabled(false)
         setLaserDoorsDisabled(false)
         setAutoCollectCashEnabled(false)
