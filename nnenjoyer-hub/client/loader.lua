@@ -35,12 +35,42 @@ local function downloadText(url)
     return responseBody
 end
 
+local function insertLocked2Route(source)
+    if string.find(source, "109883052223750", 1, true) then
+        return source
+    end
+
+    local oldText = [[    [70845479499574] = {
+        name = "Bite By Night",
+        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night.lua"
+    }
+}]]
+
+    local newText = [[    [70845479499574] = {
+        name = "Bite By Night",
+        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/bite_by_night.lua"
+    },
+    [109883052223750] = {
+        name = "Locked 2",
+        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/locked_2.lua"
+    }
+}]]
+
+    local startIndex, endIndex = string.find(source, oldText, 1, true)
+    if not startIndex then
+        error("Loader patch failed: GAME_LOADERS block")
+    end
+
+    return source:sub(1, startIndex - 1) .. newText .. source:sub(endIndex + 1)
+end
+
 local parts = {}
 for index, url in ipairs(chunkPaths) do
     parts[index] = downloadText(url)
 end
 
-local compiled, compileError = loadstring(table.concat(parts), "@loader_impl_v2")
+local combinedSource = insertLocked2Route(table.concat(parts))
+local compiled, compileError = loadstring(combinedSource, "@loader_impl_v2")
 if not compiled then
     error(compileError)
 end
