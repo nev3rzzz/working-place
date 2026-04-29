@@ -1,0 +1,44 @@
+diff --git a/locked 2/main_menu.lua b/locked 2/main_menu.lua
+--- a/locked 2/main_menu.lua
++++ b/locked 2/main_menu.lua
+@@
+ local function beginSlideInputWatch()
+     if scriptUnloaded then
+         return
+     end
+ 
+-    local now = os.clock()
+-    slideInputWatchUntil = math.max(slideInputWatchUntil, now + slideInputWatchDuration)
++    -- Q only hints that the player tried to slide. Cooldown presses must not
++    -- create slide-lock; the real detector is the character Sliding attribute.
++    local now = os.clock()
+     slideNextAttributeCheck = now
+-    slideWatchStartSpeed = math.max(latestNativeSpeed or 0, getCurrentRootHorizontalSpeed())
+-    sampleSource = "slide-watch"
++    samplePauseUntil = math.max(samplePauseUntil, now + 0.25)
++    sampleSource = "q-pressed"
+ end
+@@
+-    if now < slideInputWatchUntil then
+-        return "watching"
+-    end
+-
+     return "none"
+ end
+@@
+-    if isLikelySlideImpulse(nativeSpeed) then
+-        extendSlideLock(slideVelocityGrace, "velocity")
+-        slideLastSeenAt = now
+-        slidePeakSpeed = math.max(slidePeakSpeed, nativeSpeed)
+-        sampleSource = "slide-lock"
+-    elseif isSlideLocked() and type(nativeSpeed) == "number" and nativeSpeed == nativeSpeed then
++    if isSlideLocked() and type(nativeSpeed) == "number" and nativeSpeed == nativeSpeed then
+         slidePeakSpeed = math.max(slidePeakSpeed, math.max(nativeSpeed, 0))
+     end
+ 
+-    if not isSlideLocked() and now >= slideInputWatchUntil then
++    if not isSlideLocked() then
+         slideSource = "none"
+         slideWatchStartSpeed = 0
++        slideInputWatchUntil = 0
+     end
