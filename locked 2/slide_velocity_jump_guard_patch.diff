@@ -1,0 +1,81 @@
+diff --git a/locked 2/main_menu.lua b/locked 2/main_menu.lua
+--- a/locked 2/main_menu.lua
++++ b/locked 2/main_menu.lua
+@@
+ local slideNextAttributeCheck = 0
+ local slideLastSeenAt = 0
+ local slidePeakSpeed = 0
++local slideWatchStartSpeed = 0
++local latestNativeSpeed = 0
+@@
+ local slideInputWatchDuration = 0.75
+ local slideRecoveryGrace = 0.95
+ local slideVelocityGrace = 1.15
+ local slideAttributeCheckInterval = 0.12
++local slideVelocityMinDelta = 18
++local slideVelocityMinRatio = 1.25
+@@
+ local function extendSlideLock(duration, source)
+@@
+     end
+ end
++
++local function getCurrentRootHorizontalSpeed()
++    local root = getCharacterParts()
++    if not root then
++        return latestNativeSpeed or 0
++    end
++
++    local velocity = root.AssemblyLinearVelocity or root.Velocity
++    if typeof(velocity) ~= "Vector3" then
++        return latestNativeSpeed or 0
++    end
++
++    local speed = horizontal(velocity).Magnitude
++    if type(speed) ~= "number" or speed ~= speed then
++        return latestNativeSpeed or 0
++    end
++
++    return speed
++end
+@@
+     local now = os.clock()
+     slideInputWatchUntil = math.max(slideInputWatchUntil, now + slideInputWatchDuration)
+     slideNextAttributeCheck = now
++    slideWatchStartSpeed = math.max(latestNativeSpeed or 0, getCurrentRootHorizontalSpeed())
+     sampleSource = "slide-watch"
+ end
+@@
+     slideInputWatchUntil = 0
+     slideNextAttributeCheck = 0
+     slideLastSeenAt = 0
+     slidePeakSpeed = 0
++    slideWatchStartSpeed = 0
+@@
+     local baseline = getSlideImpulseBaseline()
+     local threshold = math.max(baseline * 1.45, baseline + 12)
++    local startSpeed = math.max(slideWatchStartSpeed or 0, 0)
++    local jumpThreshold = math.max(
++        threshold,
++        startSpeed + slideVelocityMinDelta,
++        startSpeed * slideVelocityMinRatio
++    )
+ 
+-    return nativeSpeed >= threshold
++    return nativeSpeed >= jumpThreshold
+ end
+@@
+     if not isSlideLocked() and now >= slideInputWatchUntil then
+         slideSource = "none"
++        slideWatchStartSpeed = 0
+     end
+@@
+     local nativeDelta = horizontal(currentPos - lastRootPos)
+     local nativeSpeed = nativeDelta.Magnitude / dt
++    latestNativeSpeed = nativeSpeed
+@@
+     slideLockUntil = 0
+     slideInputWatchUntil = 0
+     slideNextAttributeCheck = 0
++    slideWatchStartSpeed = 0
+     resetMotionTracking()
