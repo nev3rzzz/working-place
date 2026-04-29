@@ -1,0 +1,130 @@
+diff --git a/locked 2/main_menu.lua b/locked 2/main_menu.lua
+--- a/locked 2/main_menu.lua
++++ b/locked 2/main_menu.lua
+@@
+ local staminaSprintMargin = 2.5
+ local staminaSprintBonusRatio = 0.35
+ local staminaGraceDuration = 0.28
+ local staminaGraceUntil = 0
++local staminaAnimationStartGrace = 0.35
++local staminaAnimationDropGrace = 0.08
++local sprintHeldStartedAt = 0
++local sprintAnimationLastRunAt = 0
++
++local runAnimationIds = {
++    ["rbxassetid://119815085344016"] = true
++}
++
++local walkAnimationIds = {
++    ["rbxassetid://93741384217371"] = true
++}
+@@
+ local function getHumanoidWalkSpeed(humanoid)
+@@
+     return nil
+ end
++
++local function getAnimationId(track)
++    local ok, animation = pcall(function()
++        return track.Animation
++    end)
++
++    if ok and animation then
++        local animationId = tostring(animation.AnimationId or "")
++        if animationId ~= "" then
++            return animationId
++        end
++    end
++
++    return ""
++end
++
++local function getSprintAnimationState(humanoid)
++    if not humanoid then
++        return false, false
++    end
++
++    local animator = humanoid:FindFirstChildOfClass("Animator")
++    if not animator then
++        return false, false
++    end
++
++    local ok, tracks = pcall(function()
++        return animator:GetPlayingAnimationTracks()
++    end)
++
++    if not ok or type(tracks) ~= "table" then
++        return false, false
++    end
++
++    local runPlaying = false
++    local walkPlaying = false
++
++    for _, track in ipairs(tracks) do
++        if track.IsPlaying then
++            local name = tostring(track.Name or ""):lower()
++            local animationId = getAnimationId(track)
++
++            if runAnimationIds[animationId] or name == "run" or name:find("run", 1, true) then
++                runPlaying = true
++            end
++
++            if walkAnimationIds[animationId] or name == "walkanim" or name:find("walk", 1, true) then
++                walkPlaying = true
++            end
++        end
++    end
++
++    return runPlaying, walkPlaying
++end
+@@
+ local function updateStaminaSprintAvailability(humanoid, nativeSpeed)
+     if not sprinting or not isMoving(humanoid) then
+         staminaSprintAvailable = false
+         staminaGuardStatus = sprinting and "held idle" or "not held"
+         return false
+     end
+ 
++    local now = os.clock()
++    local runAnimationPlaying, walkAnimationPlaying = getSprintAnimationState(humanoid)
++    local sprintHeldFor = sprintHeldStartedAt > 0 and (now - sprintHeldStartedAt) or 0
++
++    if runAnimationPlaying then
++        sprintAnimationLastRunAt = now
++    end
++
++    if walkAnimationPlaying
++        and not runAnimationPlaying
++        and sprintHeldFor >= staminaAnimationStartGrace
++        and (now - sprintAnimationLastRunAt) >= staminaAnimationDropGrace then
++        staminaSprintAvailable = false
++        staminaGraceUntil = 0
++        staminaGuardStatus = "walk animation / stamina"
++        return false
++    end
++
+     local humanoidSpeed = getHumanoidWalkSpeed(humanoid)
+@@
+     local held = isSprintHeld()
+     if held ~= sprinting then
+         sprinting = held
++        sprintHeldStartedAt = held and os.clock() or 0
++        if not held then
++            sprintAnimationLastRunAt = 0
++            staminaSprintAvailable = false
++            staminaGuardStatus = "not held"
++        end
+         resetMotionTracking()
+         refreshLabels()
+     end
+@@
+     staminaSprintAvailable = false
+     staminaGuardStatus = "respawn"
+     baselineGuardStatus = "waiting for sprint sample"
++    sprintHeldStartedAt = 0
++    sprintAnimationLastRunAt = 0
+@@
+     staminaSprintAvailable = false
+     staminaGuardStatus = "unloaded"
++    sprintHeldStartedAt = 0
++    sprintAnimationLastRunAt = 0
