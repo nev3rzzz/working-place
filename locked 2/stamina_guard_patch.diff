@@ -1,0 +1,181 @@
+diff --git a/locked 2/main_menu.lua b/locked 2/main_menu.lua
+index 0000000..0000000 100644
+--- a/locked 2/main_menu.lua	
++++ b/locked 2/main_menu.lua	
+@@
+ local measurementGuardStatus = "ready"
+ local measurementRejectedCount = tonumber(env.Locked2MeasurementRejectedCount) or 0
++local staminaSprintAvailable = false
++local staminaGuardStatus = "waiting"
+@@
+ local measurementMaxRelativeShift = 0.16
+ local measurementMinAbsoluteShift = 2.5
+ local measurementMinSprintRatio = 1.45
++local staminaSprintMargin = 2.5
++local staminaSprintBonusRatio = 0.35
++local staminaGraceDuration = 0.28
++local staminaGraceUntil = 0
+@@
+ local stateLabel
+ local normalWalkLabel
+ local normalRunLabel
+ local flowWalkLabel
+ local flowRunLabel
+ local targetLabel
+ local slideLabel
++local staminaLabel
+ local guardLabel
+ local flowLabel
+ local hookLabel
+@@
+ local function getTargetRunSpeed()
+     if flowAwarenessEnabled and inFlow then
+         return getFlowTargetRunSpeed()
+     end
+ 
+     return getNormalTargetRunSpeed()
+ end
++
++local function getActiveWalkSpeed()
++    if flowAwarenessEnabled and inFlow and measuredFlowWalkSpeed and measuredFlowWalkSpeed > 0 then
++        return measuredFlowWalkSpeed
++    end
++
++    return measuredWalkSpeed
++end
++
++local function getActiveRunSpeed()
++    if flowAwarenessEnabled and inFlow and measuredFlowRunSpeed and measuredFlowRunSpeed > 0 then
++        return measuredFlowRunSpeed
++    end
++
++    return measuredRunSpeed
++end
+@@
+-    elseif enabled and sprinting and moving then
++    elseif enabled and sprinting and moving and staminaSprintAvailable then
+         state = "Modifying Sprint"
+-    elseif sprinting and moving then
++    elseif sprinting and moving and staminaSprintAvailable then
+         state = "Sprinting"
++    elseif sprinting and moving then
++        state = "Walking (stamina)"
+@@
+     safeSetLabel(flowRunLabel, "Flow sprint: " .. fmt(measuredFlowRunSpeed))
+     safeSetLabel(slideLabel, "Slide: " .. getSlideStatusText())
++    safeSetLabel(staminaLabel, "Stamina: " .. staminaGuardStatus)
+     safeSetLabel(guardLabel, "Guard: " .. measurementGuardStatus)
+@@
+ local function getHumanoidWalkSpeed(humanoid)
+     if not humanoid then
+         return nil
+     end
+@@
+ 
+     return nil
+ end
++
++local function getMinimumNativeSprintSpeed()
++    local walk = getActiveWalkSpeed()
++    local run = math.max(getActiveRunSpeed(), walk)
++    local bonus = math.max(run - walk, 0)
++
++    return walk + math.max(staminaSprintMargin, bonus * staminaSprintBonusRatio)
++end
++
++local function updateStaminaSprintAvailability(humanoid, nativeSpeed)
++    if not sprinting or not isMoving(humanoid) then
++        staminaSprintAvailable = false
++        staminaGuardStatus = sprinting and "held idle" or "not held"
++        return false
++    end
++
++    local humanoidSpeed = getHumanoidWalkSpeed(humanoid)
++    local minSprint = getMinimumNativeSprintSpeed()
++    local nativeSaysSprint = humanoidSpeed and humanoidSpeed >= minSprint
++
++    if not nativeSaysSprint and (not enabled or sprintPercent == 100) then
++        nativeSaysSprint = nativeSpeed and nativeSpeed >= minSprint
++    end
++
++    if nativeSaysSprint then
++        staminaSprintAvailable = true
++        staminaGraceUntil = os.clock() + staminaGraceDuration
++        staminaGuardStatus = "native sprint"
++        return true
++    end
++
++    if os.clock() < staminaGraceUntil then
++        staminaGuardStatus = "grace"
++        return true
++    end
++
++    staminaSprintAvailable = false
++    staminaGuardStatus = "stamina empty / walking"
++    return false
++end
+@@
+-    if sprinting and enabled and sprintPercent ~= 100 and humanoidValid then
++    if sprinting and staminaSprintAvailable and enabled and sprintPercent ~= 100 and humanoidValid then
+         sampleSource = "humanoid"
+         return humanoidSpeed
+     end
+@@
+     local humanoidSpeed = getHumanoidWalkSpeed(humanoid)
+     local sampleSpeed = chooseMovementSample(positionSpeed, velocitySpeed, humanoidSpeed)
++    local samplingAsSprint = sprinting and staminaSprintAvailable
+ 
+     if not isValidSampleSpeed(sampleSpeed) then
+         return
+     end
+ 
+-    if sprinting and not canSampleSprintSpeed() then
++    if samplingAsSprint and not canSampleSprintSpeed() then
+         if not humanoidSpeed then
+             return
+         end
+@@
+-    if sprinting then
++    if samplingAsSprint then
+         if flowAwarenessEnabled and inFlow then
+             pushSample(samples.FlowRun, sampleSpeed)
+             measuredFlowRunSpeed = applyStableMeasurement("FlowRun", measuredFlowRunSpeed, samples.FlowRun)
+@@
+                 .. " | Flow Target: " .. fmt(getFlowTargetRunSpeed())
+                 .. " | Slide: " .. getSlideStatusText()
++                .. " | Stamina: " .. staminaGuardStatus
+                 .. " | Slide Peak: " .. fmt(slidePeakSpeed > 0 and slidePeakSpeed or nil)
+                 .. " | Guard: " .. measurementGuardStatus
+@@
+ slideLabel = MeasurementsBox:AddLabel("Slide: none")
++staminaLabel = MeasurementsBox:AddLabel("Stamina: waiting")
+ guardLabel = MeasurementsBox:AddLabel("Guard: ready")
+ targetLabel = MeasurementsBox:AddLabel("Target sprint: " .. fmt(getTargetRunSpeed()))
+@@
+     if updateSlideState(nativeSpeed) then
+         sampleDistance = 0
+         sampleDuration = 0
+         sampleSource = "slide-lock"
++        staminaSprintAvailable = false
++        staminaGuardStatus = "slide"
+         lastRootPos = currentPos
+         return
+     end
++
++    local nativeSprintAvailable = updateStaminaSprintAvailability(humanoid, nativeSpeed)
+@@
+-    if not enabled or not sprinting or not isMoving(humanoid) then
++    if not enabled or not sprinting or not nativeSprintAvailable or not isMoving(humanoid) then
+         lastRootPos = currentPos
+         return
+     end
+@@
+     sprinting = false
++    staminaSprintAvailable = false
++    staminaGuardStatus = "respawn"
+     setFlowInactive()
+@@
+     enabled = false
+     sprinting = false
++    staminaSprintAvailable = false
++    staminaGuardStatus = "unloaded"
