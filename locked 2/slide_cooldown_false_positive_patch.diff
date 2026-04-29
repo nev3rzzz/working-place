@@ -1,0 +1,20 @@
+diff --git a/locked 2/main_menu.lua b/locked 2/main_menu.lua
+--- a/locked 2/main_menu.lua
++++ b/locked 2/main_menu.lua
+@@
+-local slideInputPrelock = 0.35
+ local slideInputWatchDuration = 0.75
+@@
+ local function beginSlideInputWatch()
+     if scriptUnloaded then
+         return
+     end
+ 
+     local now = os.clock()
+     slideInputWatchUntil = math.max(slideInputWatchUntil, now + slideInputWatchDuration)
+     slideNextAttributeCheck = now
+-    extendSlideLock(slideInputPrelock, "input")
+-    sampleSource = "slide-lock"
+-    resetMotionTracking()
++    sampleSource = "slide-watch"
+ end
