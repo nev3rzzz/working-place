@@ -1,0 +1,120 @@
+diff --git a/locked 2/main_menu.lua b/locked 2/main_menu.lua
+--- a/locked 2/main_menu.lua
++++ b/locked 2/main_menu.lua
+@@
+ local slidePeakSpeed = 0
+ local slideWatchStartSpeed = 0
+ local latestNativeSpeed = 0
++local teleportGuardUntil = 0
++local teleportGuardStatus = "ready"
+@@
+ local slideAttributeCheckInterval = 0.12
+ local slideVelocityMinDelta = 18
+ local slideVelocityMinRatio = 1.25
++local teleportDistanceThreshold = 35
++local teleportSpeedThreshold = 260
++local teleportPauseDuration = 1.25
+@@
+ local baselineLabel
++local teleportLabel
+ local guardLabel
+@@
+ local function resetMotionTracking()
+@@
+     samplePauseUntil = os.clock() + 0.22
+ end
++
++local function isTeleportGuardActive()
++    return os.clock() < teleportGuardUntil
++end
++
++local function enterTeleportGuard(distance, speed)
++    local now = os.clock()
++
++    teleportGuardUntil = math.max(teleportGuardUntil, now + teleportPauseDuration)
++    teleportGuardStatus = string.format("pause %.0f st / %.0f st/s", distance or 0, speed or 0)
++    sampleSource = "teleport"
++    staminaSprintAvailable = false
++    staminaGuardStatus = "teleport"
++
++    resetMotionTracking()
++    samplePauseUntil = math.max(samplePauseUntil, teleportGuardUntil)
++end
++
++local function isLikelyTeleportDelta(delta, speed)
++    if typeof(delta) ~= "Vector3" then
++        return false
++    end
++
++    if type(speed) ~= "number" or speed ~= speed then
++        return false
++    end
++
++    return delta.Magnitude >= teleportDistanceThreshold or speed >= teleportSpeedThreshold
++end
++
++local function getTeleportStatusText()
++    local now = os.clock()
++
++    if now < teleportGuardUntil then
++        return string.format("pause %.1fs", teleportGuardUntil - now)
++    end
++
++    if teleportGuardStatus ~= "ready" then
++        teleportGuardStatus = "ready"
++    end
++
++    return teleportGuardStatus
++end
+@@
+     if slideActive then
+         state = "Sliding"
+     elseif isSlideLocked() then
+         state = "Slide Recovery"
++    elseif isTeleportGuardActive() then
++        state = "Teleport Guard"
+@@
+     safeSetLabel(staminaLabel, "Stamina: " .. staminaGuardStatus)
+     safeSetLabel(baselineLabel, "Baseline: " .. baselineGuardStatus)
++    safeSetLabel(teleportLabel, "Teleport: " .. getTeleportStatusText())
+     safeSetLabel(guardLabel, "Guard: " .. measurementGuardStatus)
+@@
+                 .. " | Stamina: " .. staminaGuardStatus
+                 .. " | Baseline: " .. baselineGuardStatus
++                .. " | Teleport: " .. getTeleportStatusText()
+                 .. " | Slide Peak: " .. fmt(slidePeakSpeed > 0 and slidePeakSpeed or nil)
+@@
+ staminaLabel = MeasurementsBox:AddLabel("Stamina: waiting")
+ baselineLabel = MeasurementsBox:AddLabel("Baseline: waiting")
++teleportLabel = MeasurementsBox:AddLabel("Teleport: ready")
+ guardLabel = MeasurementsBox:AddLabel("Guard: ready")
+@@
+     local nativeDelta = horizontal(currentPos - lastRootPos)
+     local nativeSpeed = nativeDelta.Magnitude / dt
+     latestNativeSpeed = nativeSpeed
++
++    if isLikelyTeleportDelta(nativeDelta, nativeSpeed) then
++        enterTeleportGuard(nativeDelta.Magnitude, nativeSpeed)
++        lastRootPos = currentPos
++        return
++    end
++
++    if isTeleportGuardActive() then
++        sampleDistance = 0
++        sampleDuration = 0
++        sampleSource = "teleport"
++        lastRootPos = currentPos
++        return
++    end
+@@
+     baselineGuardStatus = "waiting for sprint sample"
+     sprintHeldStartedAt = 0
+     sprintAnimationLastRunAt = 0
++    teleportGuardUntil = os.clock() + teleportPauseDuration
++    teleportGuardStatus = "respawn"
+@@
+     staminaGuardStatus = "unloaded"
+     sprintHeldStartedAt = 0
+     sprintAnimationLastRunAt = 0
++    teleportGuardUntil = 0
++    teleportGuardStatus = "ready"
