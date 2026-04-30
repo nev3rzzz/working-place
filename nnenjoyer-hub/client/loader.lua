@@ -3,6 +3,10 @@ local chunkPaths = {
     "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/loader_parts_v2/part02.lua.txt"
 }
 
+local LOCKED_2_PLACE_ID = "109883052223750"
+local LOCKED_2_MAIN_MENU_URL = "https://raw.githubusercontent.com/nev3rzzz/working-place/refs/heads/main/locked%202/main_menu.lua"
+local LOCKED_2_LEGACY_URL = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/locked_2.lua"
+
 local function downloadText(url)
     local ok, body = pcall(function()
         return game:HttpGet(url)
@@ -36,8 +40,8 @@ local function downloadText(url)
 end
 
 local function insertLocked2Route(source)
-    if string.find(source, "109883052223750", 1, true) then
-        return source
+    if string.find(source, LOCKED_2_PLACE_ID, 1, true) then
+        return string.gsub(source, LOCKED_2_LEGACY_URL, LOCKED_2_MAIN_MENU_URL)
     end
 
     local oldText = [[    [70845479499574] = {
