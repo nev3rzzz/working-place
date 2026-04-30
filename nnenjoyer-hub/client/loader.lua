@@ -119,12 +119,31 @@ local function insertLocked2GameIdRoute(source)
     return patched
 end
 
+local function allowLegacyGameScripts(source)
+    if string.find(source, "legacy script", 1, true) then
+        return source
+    end
+
+    local oldText = [[    notify(WINDOW_TITLE, "Game script must return a function or Module.run.")
+    return nil, false]]
+
+    local newText = [[    if exported == nil then
+        return nil, true
+    end
+
+    notify(WINDOW_TITLE, "Game script must return a function, Module.run or run as a legacy script.")
+    return nil, false]]
+
+    local patched = replacePlain(source, oldText, newText)
+    return patched
+end
+
 local parts = {}
 for index, url in ipairs(chunkPaths) do
     parts[index] = downloadText(url)
 end
 
-local combinedSource = insertLocked2GameIdRoute(insertLocked2Route(table.concat(parts)))
+local combinedSource = allowLegacyGameScripts(insertLocked2GameIdRoute(insertLocked2Route(table.concat(parts))))
 local compiled, compileError = loadstring(combinedSource, "@loader_impl_v2")
 if not compiled then
     error(compileError)
