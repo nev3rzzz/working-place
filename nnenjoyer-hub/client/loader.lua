@@ -4,6 +4,7 @@ local chunkPaths = {
 }
 
 local LOCKED_2_PLACE_ID = "109883052223750"
+local LOCKED_2_GAME_ID = "7602095794"
 local LOCKED_2_MAIN_MENU_URL = "https://raw.githubusercontent.com/nev3rzzz/working-place/refs/heads/main/locked%202/main_menu.lua"
 local LOCKED_2_LEGACY_URL = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/locked_2.lua"
 
@@ -68,12 +69,38 @@ local function insertLocked2Route(source)
     return source:sub(1, startIndex - 1) .. newText .. source:sub(endIndex + 1)
 end
 
+local function insertLocked2GameIdRoute(source)
+    if string.find(source, "GAME_ID_LOADERS", 1, true) then
+        return source
+    end
+
+    local gameLoadersEnd = "}\n\nlocal function tryCall"
+    local replacement = "}\n\nlocal GAME_ID_LOADERS = {\n    [" .. LOCKED_2_GAME_ID .. "] = GAME_LOADERS[" .. LOCKED_2_PLACE_ID .. "]\n}\n\nlocal function tryCall"
+    local patched, replacements = string.gsub(source, gameLoadersEnd, replacement, 1)
+    if replacements == 0 then
+        error("Loader patch failed: GAME_ID_LOADERS block")
+    end
+
+    local oldRoute = "local route = GAME_LOADERS[tonumber(game.PlaceId)]"
+    local newRoute = "local route = GAME_LOADERS[tonumber(game.PlaceId)] or GAME_ID_LOADERS[tonumber(game.GameId)]"
+    patched, replacements = string.gsub(patched, oldRoute, newRoute, 1)
+    if replacements == 0 then
+        error("Loader patch failed: route resolver")
+    end
+
+    local oldUnsupported = "notify(WINDOW_TITLE, \"Unsupported game.\")"
+    local newUnsupported = "notify(WINDOW_TITLE, (\"Unsupported game. PlaceId: %s | GameId: %s\"):format(tostring(game.PlaceId), tostring(game.GameId)))"
+    patched = string.gsub(patched, oldUnsupported, newUnsupported, 1)
+
+    return patched
+end
+
 local parts = {}
 for index, url in ipairs(chunkPaths) do
     parts[index] = downloadText(url)
 end
 
-local combinedSource = insertLocked2Route(table.concat(parts))
+local combinedSource = insertLocked2GameIdRoute(insertLocked2Route(table.concat(parts)))
 local compiled, compileError = loadstring(combinedSource, "@loader_impl_v2")
 if not compiled then
     error(compileError)
