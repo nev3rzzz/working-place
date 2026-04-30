@@ -97,9 +97,16 @@ local slideInputWatchUntil = 0
 local slideNextAttributeCheck = 0
 local slideLastSeenAt = 0
 local slidePeakSpeed = 0
+local slideWatchStartSpeed = 0
+local latestNativeSpeed = 0
+local teleportGuardUntil = 0
+local teleportGuardStatus = "ready"
 
 local measurementGuardStatus = "ready"
 local measurementRejectedCount = tonumber(env.Locked2MeasurementRejectedCount) or 0
+local staminaSprintAvailable = false
+local staminaGuardStatus = "waiting"
+local baselineGuardStatus = "waiting for sprint sample"
 
 ----------------------------------------------------------------
 -- Sampling config
@@ -121,12 +128,32 @@ local sampleSource = "none"
 local measurementMaxRelativeShift = 0.16
 local measurementMinAbsoluteShift = 2.5
 local measurementMinSprintRatio = 1.45
+local staminaSprintMargin = 2.5
+local staminaSprintBonusRatio = 0.35
+local staminaGraceDuration = 0.28
+local staminaGraceUntil = 0
+local staminaAnimationStartGrace = 0.35
+local staminaAnimationDropGrace = 0.08
+local sprintHeldStartedAt = 0
+local sprintAnimationLastRunAt = 0
 
-local slideInputPrelock = 0.35
+local runAnimationIds = {
+    ["rbxassetid://119815085344016"] = true
+}
+
+local walkAnimationIds = {
+    ["rbxassetid://93741384217371"] = true
+}
+
 local slideInputWatchDuration = 0.75
 local slideRecoveryGrace = 0.95
 local slideVelocityGrace = 1.15
 local slideAttributeCheckInterval = 0.12
+local slideVelocityMinDelta = 18
+local slideVelocityMinRatio = 1.25
+local teleportDistanceThreshold = 35
+local teleportSpeedThreshold = 260
+local teleportPauseDuration = 1.25
 
 local samples = {
     Walk = {},
@@ -175,6 +202,9 @@ local flowWalkLabel
 local flowRunLabel
 local targetLabel
 local slideLabel
+local staminaLabel
+local baselineLabel
+local teleportLabel
 local guardLabel
 local flowLabel
 local hookLabel
@@ -290,6 +320,49 @@ local function resetMotionTracking()
     samplePauseUntil = os.clock() + 0.22
 end
 
+local function isTeleportGuardActive()
+    return os.clock() < teleportGuardUntil
+end
+
+local function enterTeleportGuard(distance, speed)
+    local now = os.clock()
+
+    teleportGuardUntil = math.max(teleportGuardUntil, now + teleportPauseDuration)
+    teleportGuardStatus = string.format("pause %.0f st / %.0f st/s", distance or 0, speed or 0)
+    sampleSource = "teleport"
+    staminaSprintAvailable = false
+    staminaGuardStatus = "teleport"
+
+    resetMotionTracking()
+    samplePauseUntil = math.max(samplePauseUntil, teleportGuardUntil)
+end
+
+local function isLikelyTeleportDelta(delta, speed)
+    if typeof(delta) ~= "Vector3" then
+        return false
+    end
+
+    if type(speed) ~= "number" or speed ~= speed then
+        return false
+    end
+
+    return delta.Magnitude >= teleportDistanceThreshold or speed >= teleportSpeedThreshold
+end
+
+local function getTeleportStatusText()
+    local now = os.clock()
+
+    if now < teleportGuardUntil then
+        return string.format("pause %.1fs", teleportGuardUntil - now)
+    end
+
+    if teleportGuardStatus ~= "ready" then
+        teleportGuardStatus = "ready"
+    end
+
+    return teleportGuardStatus
+end
+
 local function isSlideAttributeActive()
     local character = player.Character
     if not character then
@@ -312,17 +385,36 @@ local function extendSlideLock(duration, source)
     end
 end
 
+local function getCurrentRootHorizontalSpeed()
+    local root = getCharacterParts()
+    if not root then
+        return latestNativeSpeed or 0
+    end
+
+    local velocity = root.AssemblyLinearVelocity or root.Velocity
+    if typeof(velocity) ~= "Vector3" then
+        return latestNativeSpeed or 0
+    end
+
+    local speed = horizontal(velocity).Magnitude
+    if type(speed) ~= "number" or speed ~= speed then
+        return latestNativeSpeed or 0
+    end
+
+    return speed
+end
+
 local function beginSlideInputWatch()
     if scriptUnloaded then
         return
     end
 
+    -- Q only hints that the player tried to slide. Cooldown presses must not
+    -- create slide-lock; the real detector is the character Sliding attribute.
     local now = os.clock()
-    slideInputWatchUntil = math.max(slideInputWatchUntil, now + slideInputWatchDuration)
-    slideNextAttributeCheck = now
-    extendSlideLock(slideInputPrelock, "input")
-    sampleSource = "slide-lock"
-    resetMotionTracking()
+    slideNextAttributeCheck = 0
+    samplePauseUntil = math.max(samplePauseUntil, now + 0.25)
+    sampleSource = "q-pressed"
 end
 
 local function setSlideActiveState(active, source)
@@ -368,10 +460,6 @@ local function getSlideStatusText()
         return string.format("recovery %.1fs", slideLockUntil - now)
     end
 
-    if now < slideInputWatchUntil then
-        return "watching"
-    end
-
     return "none"
 end
 
@@ -388,6 +476,7 @@ local function connectSlideAttribute(character)
     slideNextAttributeCheck = 0
     slideLastSeenAt = 0
     slidePeakSpeed = 0
+    slideWatchStartSpeed = 0
 
     if not character then
         return
@@ -608,6 +697,59 @@ local function getTargetRunSpeed()
     return getNormalTargetRunSpeed()
 end
 
+local function getActiveWalkSpeed()
+    if flowAwarenessEnabled and inFlow and measuredFlowWalkSpeed and measuredFlowWalkSpeed > 0 then
+        return measuredFlowWalkSpeed
+    end
+
+    return measuredWalkSpeed
+end
+
+local function getActiveRunSpeed()
+    if flowAwarenessEnabled and inFlow and measuredFlowRunSpeed and measuredFlowRunSpeed > 0 then
+        return measuredFlowRunSpeed
+    end
+
+    return measuredRunSpeed
+end
+
+local function hasNormalRunBaseline()
+    return measurementAnchors.Run ~= nil
+        and measuredRunSpeed ~= nil
+        and measuredRunSpeed > measuredWalkSpeed
+end
+
+local function hasFlowRunBaseline()
+    return measurementAnchors.FlowRun ~= nil
+        and measuredFlowRunSpeed ~= nil
+        and measuredFlowRunSpeed > (measuredFlowWalkSpeed or measuredWalkSpeed)
+end
+
+local function canModifySprintSpeed()
+    if flowAwarenessEnabled and inFlow then
+        if hasFlowRunBaseline() then
+            baselineGuardStatus = "flow baseline ready"
+            return true
+        end
+
+        if hasNormalRunBaseline() then
+            baselineGuardStatus = "flow fallback: normal baseline"
+            return true
+        end
+
+        baselineGuardStatus = "waiting for sprint baseline"
+        return false
+    end
+
+    if hasNormalRunBaseline() then
+        baselineGuardStatus = "normal baseline ready"
+        return true
+    end
+
+    baselineGuardStatus = "waiting for sprint baseline"
+    return false
+end
+
 local function getSlideImpulseBaseline()
     local baseline = math.max(
         tonumber(measuredWalkSpeed) or 0,
@@ -635,8 +777,14 @@ local function isLikelySlideImpulse(nativeSpeed)
 
     local baseline = getSlideImpulseBaseline()
     local threshold = math.max(baseline * 1.45, baseline + 12)
+    local startSpeed = math.max(slideWatchStartSpeed or 0, 0)
+    local jumpThreshold = math.max(
+        threshold,
+        startSpeed + slideVelocityMinDelta,
+        startSpeed * slideVelocityMinRatio
+    )
 
-    return nativeSpeed >= threshold
+    return nativeSpeed >= jumpThreshold
 end
 
 local function updateSlideState(nativeSpeed)
@@ -652,17 +800,14 @@ local function updateSlideState(nativeSpeed)
         end
     end
 
-    if isLikelySlideImpulse(nativeSpeed) then
-        extendSlideLock(slideVelocityGrace, "velocity")
-        slideLastSeenAt = now
-        slidePeakSpeed = math.max(slidePeakSpeed, nativeSpeed)
-        sampleSource = "slide-lock"
-    elseif isSlideLocked() and type(nativeSpeed) == "number" and nativeSpeed == nativeSpeed then
+    if isSlideLocked() and type(nativeSpeed) == "number" and nativeSpeed == nativeSpeed then
         slidePeakSpeed = math.max(slidePeakSpeed, math.max(nativeSpeed, 0))
     end
 
-    if not isSlideLocked() and now >= slideInputWatchUntil then
+    if not isSlideLocked() then
         slideSource = "none"
+        slideWatchStartSpeed = 0
+        slideInputWatchUntil = 0
     end
 
     return isSlideLocked()
@@ -677,10 +822,14 @@ local function getDisplayState()
         state = "Sliding"
     elseif isSlideLocked() then
         state = "Slide Recovery"
-    elseif enabled and sprinting and moving then
+    elseif isTeleportGuardActive() then
+        state = "Teleport Guard"
+    elseif enabled and sprinting and moving and staminaSprintAvailable and canModifySprintSpeed() then
         state = "Modifying Sprint"
-    elseif sprinting and moving then
+    elseif sprinting and moving and staminaSprintAvailable then
         state = "Sprinting"
+    elseif sprinting and moving then
+        state = "Walking (stamina/calibration)"
     elseif moving then
         state = "Walking"
     elseif enabled and sprinting then
@@ -705,6 +854,9 @@ local function refreshLabels()
     safeSetLabel(flowWalkLabel, "Flow walk: " .. fmt(measuredFlowWalkSpeed))
     safeSetLabel(flowRunLabel, "Flow sprint: " .. fmt(measuredFlowRunSpeed))
     safeSetLabel(slideLabel, "Slide: " .. getSlideStatusText())
+    safeSetLabel(staminaLabel, "Stamina: " .. staminaGuardStatus)
+    safeSetLabel(baselineLabel, "Baseline: " .. baselineGuardStatus)
+    safeSetLabel(teleportLabel, "Teleport: " .. getTeleportStatusText())
     safeSetLabel(guardLabel, "Guard: " .. measurementGuardStatus)
     if flowAwarenessEnabled and inFlow then
         safeSetLabel(targetLabel, "Target: flow " .. fmt(getFlowTargetRunSpeed()))
@@ -935,6 +1087,118 @@ local function getHumanoidWalkSpeed(humanoid)
     return nil
 end
 
+local function getAnimationId(track)
+    local ok, animation = pcall(function()
+        return track.Animation
+    end)
+
+    if ok and animation then
+        local animationId = tostring(animation.AnimationId or "")
+        if animationId ~= "" then
+            return animationId
+        end
+    end
+
+    return ""
+end
+
+local function getSprintAnimationState(humanoid)
+    if not humanoid then
+        return false, false
+    end
+
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if not animator then
+        return false, false
+    end
+
+    local ok, tracks = pcall(function()
+        return animator:GetPlayingAnimationTracks()
+    end)
+
+    if not ok or type(tracks) ~= "table" then
+        return false, false
+    end
+
+    local runPlaying = false
+    local walkPlaying = false
+
+    for _, track in ipairs(tracks) do
+        if track.IsPlaying then
+            local name = tostring(track.Name or ""):lower()
+            local animationId = getAnimationId(track)
+
+            if runAnimationIds[animationId] or name == "run" or name:find("run", 1, true) then
+                runPlaying = true
+            end
+
+            if walkAnimationIds[animationId] or name == "walkanim" or name:find("walk", 1, true) then
+                walkPlaying = true
+            end
+        end
+    end
+
+    return runPlaying, walkPlaying
+end
+
+local function getMinimumNativeSprintSpeed()
+    local walk = getActiveWalkSpeed()
+    local run = math.max(getActiveRunSpeed(), walk)
+    local bonus = math.max(run - walk, 0)
+
+    return walk + math.max(staminaSprintMargin, bonus * staminaSprintBonusRatio)
+end
+
+local function updateStaminaSprintAvailability(humanoid, nativeSpeed)
+    if not sprinting or not isMoving(humanoid) then
+        staminaSprintAvailable = false
+        staminaGuardStatus = sprinting and "held idle" or "not held"
+        return false
+    end
+
+    local now = os.clock()
+    local runAnimationPlaying, walkAnimationPlaying = getSprintAnimationState(humanoid)
+    local sprintHeldFor = sprintHeldStartedAt > 0 and (now - sprintHeldStartedAt) or 0
+
+    if runAnimationPlaying then
+        sprintAnimationLastRunAt = now
+    end
+
+    if walkAnimationPlaying
+        and not runAnimationPlaying
+        and sprintHeldFor >= staminaAnimationStartGrace
+        and (now - sprintAnimationLastRunAt) >= staminaAnimationDropGrace then
+        staminaSprintAvailable = false
+        staminaGraceUntil = 0
+        staminaGuardStatus = "walk animation / stamina"
+        return false
+    end
+
+    local humanoidSpeed = getHumanoidWalkSpeed(humanoid)
+    local minSprint = getMinimumNativeSprintSpeed()
+    local nativeSaysSprint = humanoidSpeed and humanoidSpeed >= minSprint
+
+    if not nativeSaysSprint and (not enabled or sprintPercent == 100) then
+        nativeSaysSprint = nativeSpeed and nativeSpeed >= minSprint
+    end
+
+    if nativeSaysSprint then
+        staminaSprintAvailable = true
+        staminaGraceUntil = os.clock() + staminaGraceDuration
+        staminaGuardStatus = "native sprint"
+        return true
+    end
+
+    if os.clock() < staminaGraceUntil then
+        staminaGuardStatus = "grace"
+        return true
+    end
+
+    staminaSprintAvailable = false
+    staminaGuardStatus = "stamina empty / walking"
+    return false
+end
+
 local function getVelocitySpeed(root)
     if not root then
         return nil
@@ -960,7 +1224,7 @@ local function chooseMovementSample(positionSpeed, velocitySpeed, humanoidSpeed)
 
     -- When our CFrame modifier is active, position/velocity include our own
     -- correction. Humanoid.WalkSpeed remains the game's native baseline.
-    if sprinting and enabled and sprintPercent ~= 100 and humanoidValid then
+    if sprinting and staminaSprintAvailable and enabled and sprintPercent ~= 100 and humanoidValid then
         sampleSource = "humanoid"
         return humanoidSpeed
     end
@@ -1020,12 +1284,13 @@ local function updateSpeedSamples(positionSpeed, velocitySpeed, humanoid)
 
     local humanoidSpeed = getHumanoidWalkSpeed(humanoid)
     local sampleSpeed = chooseMovementSample(positionSpeed, velocitySpeed, humanoidSpeed)
+    local samplingAsSprint = sprinting and staminaSprintAvailable
 
     if not isValidSampleSpeed(sampleSpeed) then
         return
     end
 
-    if sprinting and not canSampleSprintSpeed() then
+    if samplingAsSprint and not canSampleSprintSpeed() then
         if not humanoidSpeed then
             return
         end
@@ -1034,7 +1299,7 @@ local function updateSpeedSamples(positionSpeed, velocitySpeed, humanoid)
         sampleSource = "humanoid"
     end
 
-    if sprinting then
+    if samplingAsSprint then
         if flowAwarenessEnabled and inFlow then
             pushSample(samples.FlowRun, sampleSpeed)
             measuredFlowRunSpeed = applyStableMeasurement("FlowRun", measuredFlowRunSpeed, samples.FlowRun)
@@ -1065,6 +1330,7 @@ local function resetAllMeasurements()
     measurementAnchors.FlowWalk = nil
     measurementAnchors.FlowRun = nil
     measurementGuardStatus = "reset"
+    baselineGuardStatus = "waiting for sprint sample"
     measurementRejectedCount = 0
 
     clearAllSamples()
@@ -1081,6 +1347,7 @@ local function resetFlowMeasurements()
     measurementAnchors.FlowWalk = nil
     measurementAnchors.FlowRun = nil
     measurementGuardStatus = "flow reset"
+    baselineGuardStatus = "waiting for flow sprint sample"
 
     clearArray(samples.FlowWalk)
     clearArray(samples.FlowRun)
@@ -1177,6 +1444,9 @@ MeasurementsBox:AddButton({
                 .. " | Target: " .. fmt(getTargetRunSpeed())
                 .. " | Flow Target: " .. fmt(getFlowTargetRunSpeed())
                 .. " | Slide: " .. getSlideStatusText()
+                .. " | Stamina: " .. staminaGuardStatus
+                .. " | Baseline: " .. baselineGuardStatus
+                .. " | Teleport: " .. getTeleportStatusText()
                 .. " | Slide Peak: " .. fmt(slidePeakSpeed > 0 and slidePeakSpeed or nil)
                 .. " | Guard: " .. measurementGuardStatus
                 .. " | Rejected: " .. tostring(measurementRejectedCount)
@@ -1203,13 +1473,16 @@ normalRunLabel = MeasurementsBox:AddLabel("Normal sprint: " .. fmt(measuredRunSp
 flowWalkLabel = MeasurementsBox:AddLabel("Flow walk: " .. fmt(measuredFlowWalkSpeed))
 flowRunLabel = MeasurementsBox:AddLabel("Flow sprint: " .. fmt(measuredFlowRunSpeed))
 slideLabel = MeasurementsBox:AddLabel("Slide: none")
+staminaLabel = MeasurementsBox:AddLabel("Stamina: waiting")
+baselineLabel = MeasurementsBox:AddLabel("Baseline: waiting")
+teleportLabel = MeasurementsBox:AddLabel("Teleport: ready")
 guardLabel = MeasurementsBox:AddLabel("Guard: ready")
 targetLabel = MeasurementsBox:AddLabel("Target sprint: " .. fmt(getTargetRunSpeed()))
 
 local KeysBox = Tabs.Settings:AddLeftGroupbox("Keybinds")
 
 KeysBox:AddLabel("Toggle modifier"):AddKeyPicker("ToggleKeybind", {
-    Default = "LeftAlt",
+    Default = "N",
     SyncToggleState = false,
     Mode = "Toggle",
     Text = "Toggle sprint modifier",
@@ -1240,7 +1513,7 @@ MenuGroup:AddButton({
 })
 
 MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
-    Default = "End",
+    Default = "RightAlt",
     NoUI = true,
     Text = "Menu keybind"
 })
@@ -1275,7 +1548,8 @@ SaveManager:SetLibrary(Library)
 
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({
-    "MenuKeybind"
+    "MenuKeybind",
+    "ToggleKeybind"
 })
 
 ThemeManager:SetFolder("Locked2")
@@ -1311,6 +1585,12 @@ heartbeatConn = RunService.Heartbeat:Connect(function(dt)
     local held = isSprintHeld()
     if held ~= sprinting then
         sprinting = held
+        sprintHeldStartedAt = held and os.clock() or 0
+        if not held then
+            sprintAnimationLastRunAt = 0
+            staminaSprintAvailable = false
+            staminaGuardStatus = "not held"
+        end
         resetMotionTracking()
         refreshLabels()
     end
@@ -1338,14 +1618,33 @@ heartbeatConn = RunService.Heartbeat:Connect(function(dt)
 
     local nativeDelta = horizontal(currentPos - lastRootPos)
     local nativeSpeed = nativeDelta.Magnitude / dt
+    latestNativeSpeed = nativeSpeed
+
+    if isLikelyTeleportDelta(nativeDelta, nativeSpeed) then
+        enterTeleportGuard(nativeDelta.Magnitude, nativeSpeed)
+        lastRootPos = currentPos
+        return
+    end
+
+    if isTeleportGuardActive() then
+        sampleDistance = 0
+        sampleDuration = 0
+        sampleSource = "teleport"
+        lastRootPos = currentPos
+        return
+    end
 
     if updateSlideState(nativeSpeed) then
         sampleDistance = 0
         sampleDuration = 0
         sampleSource = "slide-lock"
+        staminaSprintAvailable = false
+        staminaGuardStatus = "slide"
         lastRootPos = currentPos
         return
     end
+
+    local nativeSprintAvailable = updateStaminaSprintAvailability(humanoid, nativeSpeed)
 
     if nativeSpeed <= maxReasonableSpeed then
         sampleDistance = sampleDistance + nativeDelta.Magnitude
@@ -1362,7 +1661,7 @@ heartbeatConn = RunService.Heartbeat:Connect(function(dt)
         updateSpeedSamples(positionSampleSpeed, velocitySampleSpeed, humanoid)
     end
 
-    if not enabled or not sprinting or not isMoving(humanoid) then
+    if not enabled or not sprinting or not nativeSprintAvailable or not canModifySprintSpeed() or not isMoving(humanoid) then
         lastRootPos = currentPos
         return
     end
@@ -1391,6 +1690,13 @@ end)
 ----------------------------------------------------------------
 charAddedConn = player.CharacterAdded:Connect(function(character)
     sprinting = false
+    staminaSprintAvailable = false
+    staminaGuardStatus = "respawn"
+    baselineGuardStatus = "waiting for sprint sample"
+    sprintHeldStartedAt = 0
+    sprintAnimationLastRunAt = 0
+    teleportGuardUntil = os.clock() + teleportPauseDuration
+    teleportGuardStatus = "respawn"
     setFlowInactive()
     connectSlideAttribute(character)
     resetMotionTracking()
@@ -1418,6 +1724,12 @@ local function cleanup()
     scriptUnloaded = true
     enabled = false
     sprinting = false
+    staminaSprintAvailable = false
+    staminaGuardStatus = "unloaded"
+    sprintHeldStartedAt = 0
+    sprintAnimationLastRunAt = 0
+    teleportGuardUntil = 0
+    teleportGuardStatus = "ready"
 
     stopFlowDetector()
     setFlowInactive()
@@ -1426,6 +1738,7 @@ local function cleanup()
     slideLockUntil = 0
     slideInputWatchUntil = 0
     slideNextAttributeCheck = 0
+    slideWatchStartSpeed = 0
     resetMotionTracking()
 
     if heartbeatConn then
