@@ -40,9 +40,23 @@ local function downloadText(url)
     return responseBody
 end
 
+local function replacePlain(source, oldText, newText, label)
+    local startIndex, endIndex = string.find(source, oldText, 1, true)
+    if not startIndex then
+        if label then
+            error("Loader patch failed: " .. label)
+        end
+
+        return source, false
+    end
+
+    return source:sub(1, startIndex - 1) .. newText .. source:sub(endIndex + 1), true
+end
+
 local function insertLocked2Route(source)
     if string.find(source, LOCKED_2_PLACE_ID, 1, true) then
-        return string.gsub(source, LOCKED_2_LEGACY_URL, LOCKED_2_MAIN_MENU_URL)
+        local patched = replacePlain(source, LOCKED_2_LEGACY_URL, LOCKED_2_MAIN_MENU_URL)
+        return patched
     end
 
     local oldText = [[    [70845479499574] = {
@@ -61,12 +75,7 @@ local function insertLocked2Route(source)
     }
 }]]
 
-    local startIndex, endIndex = string.find(source, oldText, 1, true)
-    if not startIndex then
-        error("Loader patch failed: GAME_LOADERS block")
-    end
-
-    return source:sub(1, startIndex - 1) .. newText .. source:sub(endIndex + 1)
+    return replacePlain(source, oldText, newText, "GAME_LOADERS block")
 end
 
 local function insertLocked2GameIdRoute(source)
@@ -76,21 +85,15 @@ local function insertLocked2GameIdRoute(source)
 
     local gameLoadersEnd = "}\n\nlocal function tryCall"
     local replacement = "}\n\nlocal GAME_ID_LOADERS = {\n    [" .. LOCKED_2_GAME_ID .. "] = GAME_LOADERS[" .. LOCKED_2_PLACE_ID .. "]\n}\n\nlocal function tryCall"
-    local patched, replacements = string.gsub(source, gameLoadersEnd, replacement, 1)
-    if replacements == 0 then
-        error("Loader patch failed: GAME_ID_LOADERS block")
-    end
+    local patched = replacePlain(source, gameLoadersEnd, replacement, "GAME_ID_LOADERS block")
 
     local oldRoute = "local route = GAME_LOADERS[tonumber(game.PlaceId)]"
     local newRoute = "local route = GAME_LOADERS[tonumber(game.PlaceId)] or GAME_ID_LOADERS[tonumber(game.GameId)]"
-    patched, replacements = string.gsub(patched, oldRoute, newRoute, 1)
-    if replacements == 0 then
-        error("Loader patch failed: route resolver")
-    end
+    patched = replacePlain(patched, oldRoute, newRoute, "route resolver")
 
     local oldUnsupported = "notify(WINDOW_TITLE, \"Unsupported game.\")"
     local newUnsupported = "notify(WINDOW_TITLE, (\"Unsupported game. PlaceId: %s | GameId: %s\"):format(tostring(game.PlaceId), tostring(game.GameId)))"
-    patched = string.gsub(patched, oldUnsupported, newUnsupported, 1)
+    patched = replacePlain(patched, oldUnsupported, newUnsupported) or patched
 
     return patched
 end
