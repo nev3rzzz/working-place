@@ -52,7 +52,7 @@ local function insertLocked2Route(source)
     },
     [109883052223750] = {
         name = "Locked 2",
-        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/main/nnenjoyer-hub/client/games/locked_2.lua"
+        url = "https://raw.githubusercontent.com/nev3rzzz/working-place/refs/heads/main/locked%202/main_menu.lua"
     }
 }]]
 
