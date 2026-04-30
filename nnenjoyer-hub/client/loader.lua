@@ -40,17 +40,22 @@ local function downloadText(url)
     return responseBody
 end
 
-local function replacePlain(source, oldText, newText, label)
+local function replacePlain(source, oldText, newText)
     local startIndex, endIndex = string.find(source, oldText, 1, true)
     if not startIndex then
-        if label then
-            error("Loader patch failed: " .. label)
-        end
-
         return source, false
     end
 
     return source:sub(1, startIndex - 1) .. newText .. source:sub(endIndex + 1), true
+end
+
+local function replaceRequired(source, oldText, newText, label)
+    local patched, changed = replacePlain(source, oldText, newText)
+    if not changed then
+        error("Loader patch failed: " .. label)
+    end
+
+    return patched
 end
 
 local function insertLocked2Route(source)
@@ -75,7 +80,7 @@ local function insertLocked2Route(source)
     }
 }]]
 
-    return replacePlain(source, oldText, newText, "GAME_LOADERS block")
+    return replaceRequired(source, oldText, newText, "GAME_LOADERS block")
 end
 
 local function insertLocked2GameIdRoute(source)
@@ -85,11 +90,27 @@ local function insertLocked2GameIdRoute(source)
 
     local gameLoadersEnd = "}\n\nlocal function tryCall"
     local replacement = "}\n\nlocal GAME_ID_LOADERS = {\n    [" .. LOCKED_2_GAME_ID .. "] = GAME_LOADERS[" .. LOCKED_2_PLACE_ID .. "]\n}\n\nlocal function tryCall"
-    local patched = replacePlain(source, gameLoadersEnd, replacement, "GAME_ID_LOADERS block")
+    local patched = replaceRequired(source, gameLoadersEnd, replacement, "GAME_ID_LOADERS block")
 
     local oldRoute = "local route = GAME_LOADERS[tonumber(game.PlaceId)]"
     local newRoute = "local route = GAME_LOADERS[tonumber(game.PlaceId)] or GAME_ID_LOADERS[tonumber(game.GameId)]"
-    patched = replacePlain(patched, oldRoute, newRoute, "route resolver")
+    local changed = false
+    patched, changed = replacePlain(patched, oldRoute, newRoute)
+
+    if not changed then
+        local count
+        patched, count = string.gsub(
+            patched,
+            "local%s+route%s*=%s*GAME_LOADERS%[tonumber%(game%.PlaceId%)%]",
+            newRoute,
+            1
+        )
+        changed = count and count > 0
+    end
+
+    if not changed then
+        error("Loader patch failed: route resolver")
+    end
 
     local oldUnsupported = "notify(WINDOW_TITLE, \"Unsupported game.\")"
     local newUnsupported = "notify(WINDOW_TITLE, (\"Unsupported game. PlaceId: %s | GameId: %s\"):format(tostring(game.PlaceId), tostring(game.GameId)))"
